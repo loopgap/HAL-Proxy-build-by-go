@@ -1,116 +1,128 @@
-import axios from 'axios'
+import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig, AxiosError } from 'axios'
 import type { CaseRecord, Approval, ReportSummary, RunResult, CaseSpec, EventEnvelope } from '@/types'
 
-const API_BASE = '/v1'
-
-const api = axios.create({
-  baseURL: API_BASE,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
-
-// API response types
-interface ApiResponse<T> {
+export interface ApiResponse<T> {
   data: T | null
   error: string | null
+  status?: number
 }
 
-function handleResponse<T>(response: any): ApiResponse<T> {
-  if (response.data.error) {
-    return { data: null, error: response.data.error }
+export interface RequestConfig extends AxiosRequestConfig {
+  retries?: number
+  retryDelay?: number
+}
+
+const DEFAULT_TIMEOUT = 30000
+const DEFAULT_RETRIES = 3
+const DEFAULT_RETRY_DELAY = 1000
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/v1'
+
+const api: AxiosInstance = axios.create({
+  baseURL: API_BASE,
+  timeout: DEFAULT_TIMEOUT,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+api.interceptors.request.use(
+  (config: InternalAxiosRequestConfig) => {
+    const token = localStorage.getItem('auth_token')
+    if (token && config.headers) config.headers.Authorization = 'Bearer ' + token
+    config.headers['X-Request-Time'] = new Date().toISOString()
+    config.headers['X-Request-ID'] = crypto.randomUUID()
+    return config
+  },
+  (error: AxiosError) => Promise.reject(error)
+)
+
+api.interceptors.response.use(
+  (response: AxiosResponse) => response,
+  async (error: AxiosError) => {
+    const originalRequest = error.config as InternalAxiosRequestConfig & RequestConfig
+    if (!error.response) {
+      if (originalRequest && shouldRetry(error)) return retryRequest(originalRequest)
+      return Promise.reject({ message: 'Network error.', code: 'NETWORK_ERROR' })
+    }
+    const status = error.response.status
+    if (status === 401) { localStorage.removeItem('auth_token'); window.location.href = '/login' }
+    if (status === 429 && originalRequest && shouldRetry(error)) { await delay(5000); return retryRequest(originalRequest) }
+    if ((status === 500 || status === 502 || status === 503) && originalRequest && shouldRetry(error)) return retryRequest(originalRequest)
+    return Promise.reject({ message: (error.response.data as { error?: string })?.error || error.message, code: status.toString() })
   }
-  return { data: response.data as T, error: null }
+)
+
+function shouldRetry(error: AxiosError): boolean {
+  const config = error.config as InternalAxiosRequestConfig & RequestConfig
+  if (!config || config.signal?.aborted) return false
+  const retries = config.retries ?? DEFAULT_RETRIES
+  const retryCount = (config as unknown as { _retryCount?: number })._retryCount ?? 0
+  return retryCount < retries
 }
 
-function handleError(error: any): ApiResponse<never> {
-  const message = error.response?.data?.error || error.message || 'An error occurred'
-  return { data: null, error: message }
+async function retryRequest(config: InternalAxiosRequestConfig & RequestConfig): Promise<AxiosResponse> {
+  const retryCount = ((config as unknown as { _retryCount?: number })._retryCount ?? 0) + 1
+  ;(config as unknown as { _retryCount?: number })._retryCount = retryCount
+  const delayMs = (config.retryDelay ?? DEFAULT_RETRY_DELAY) * Math.pow(2, retryCount - 1)
+  await delay(delayMs)
+  return api(config)
 }
 
-// Case APIs
+function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)) }
+function handleResponse<T>(response: AxiosResponse): ApiResponse<T> { return { data: response.data as T, error: null, status: response.status } }
+function handleError(error: { message?: string; code?: string }): ApiResponse<never> { return { data: null, error: error.message || 'Error' } }
+
+export function createCancellableRequest<T>(request: (signal: AbortSignal) => Promise<ApiResponse<T>>): { request: Promise<ApiResponse<T>>; cancel: () => void } {
+  const controller = new AbortController()
+  let cancelled = false
+  const promise = request(controller.signal).finally(() => { cancelled = true })
+  return { request: promise, cancel: () => { if (!cancelled) controller.abort() } }
+}// Case APIs
 export async function getCases(): Promise<ApiResponse<CaseRecord[]>> {
-  try {
-    // For now, return empty list since ListCases is not implemented in backend
-    return { data: [], error: null }
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const response = await api.get('/cases'); return handleResponse<CaseRecord[]>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 export async function getCase(id: string): Promise<ApiResponse<CaseRecord>> {
-  try {
-    const response = await api.get(`/cases/${id}`)
-    return handleResponse<CaseRecord>(response)
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const response = await api.get('/cases/' + id); return handleResponse<CaseRecord>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 export async function createCase(spec: CaseSpec): Promise<ApiResponse<CaseRecord>> {
-  try {
-    const response = await api.post('/cases', spec)
-    return handleResponse<CaseRecord>(response)
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const response = await api.post('/cases', spec); return handleResponse<CaseRecord>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 export async function runCase(id: string): Promise<ApiResponse<RunResult>> {
-  try {
-    const response = await api.post(`/cases/${id}:run`)
-    return handleResponse<RunResult>(response)
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const response = await api.post('/cases/' + id + ':run'); return handleResponse<RunResult>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 export async function getCaseEvents(id: string): Promise<ApiResponse<EventEnvelope[]>> {
-  try {
-    const response = await api.get(`/cases/${id}/events`)
-    return handleResponse<EventEnvelope[]>(response)
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const response = await api.get('/cases/' + id + '/events'); return handleResponse<EventEnvelope[]>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 // Approval APIs
 export async function getApprovals(caseId?: string): Promise<ApiResponse<Approval[]>> {
-  try {
-    const params = caseId ? { case_id: caseId } : {}
-    const response = await api.get('/approvals', { params })
-    return handleResponse<Approval[]>(response)
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const params = caseId ? { case_id: caseId } : {}; const response = await api.get('/approvals', { params }); return handleResponse<Approval[]>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 export async function approveApproval(id: string): Promise<ApiResponse<Approval>> {
-  try {
-    const response = await api.post(`/approvals/${id}:approve`)
-    return handleResponse<Approval>(response)
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const response = await api.post('/approvals/' + id + ':approve'); return handleResponse<Approval>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 export async function rejectApproval(id: string): Promise<ApiResponse<Approval>> {
-  try {
-    const response = await api.post(`/approvals/${id}:reject`)
-    return handleResponse<Approval>(response)
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const response = await api.post('/approvals/' + id + ':reject'); return handleResponse<Approval>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 // Report APIs
 export async function buildReport(caseId: string): Promise<ApiResponse<ReportSummary>> {
-  try {
-    const response = await api.post(`/reports/${caseId}:build`)
-    return handleResponse<ReportSummary>(response)
-  } catch (error) {
-    return handleError(error)
-  }
+  try { const response = await api.post('/reports/' + caseId + ':build'); return handleResponse<ReportSummary>(response) }
+  catch (error) { return handleError(error as { message?: string; code?: string }) }
 }
 
 export { api }
+export default api

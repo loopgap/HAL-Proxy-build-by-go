@@ -1,8 +1,95 @@
-bridge.exe
-bridgeosd.exe
+# ==========================================
+# BridgeOS .gitignore
+# ==========================================
+
+# === Go ===
+# Binaries
 bridge
 bridgeosd
+bridge.exe
+bridgeosd.exe
+*.exe
+bin/
+*.test
+
+# Dependencies (但保留 go.mod 和 go.sum)
+/vendor/
+
+# Build outputs
+*.out
+
+# === Database ===
+# Local SQLite database
 bridgeos.db
+*.db
+
+# === Artifacts ===
 artifacts/*.md
 artifacts/*.json
+artifacts/*.html
+!artifacts/.gitkeep
+
+# === Frontend (React/TypeScript) ===
+# Dependencies
+ui/node_modules/
+ui/dist/
+ui/dist-ssr/
+
+# Environment files
+ui/.env
+ui/.env.local
+ui/.env.development
+ui/.env.production
+ui/.env.*.local
+
+# Logs
+ui/npm-debug.log*
+ui/yarn-debug.log*
+ui/yarn-error.log*
+ui/pnpm-debug.log*
+
+# Editor directories
+ui/.DS_Store
+ui/Thumbs.db
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Logs ===
+*.log
+logs/
+*.log.*
+
+# === Coverage ===
+coverage.out
+coverage.html
+*.cover
+
+# === Temporary ===
+*.tmp
+*.bak
+*.orig
+*.old
+
+# === Secrets ===
+*.pem
+*.key
+*.crt
+secrets/
+
+# === Build ===
+build/
 dist/
+out/

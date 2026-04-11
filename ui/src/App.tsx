@@ -1,6 +1,10 @@
 import { Suspense, lazy } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
+import { ErrorBoundary } from './components/ui/ErrorBoundary'
+import { LoadingSpinner } from './components/ui/LoadingSpinner'
+import { Breadcrumbs, useBreadcrumbs } from './components/ui/Breadcrumbs'
+import NotFoundPage from './pages/NotFound'
 
 // Lazy load all page components for code splitting
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -9,11 +13,20 @@ const CaseDetail = lazy(() => import('./pages/CaseDetail'))
 const ApprovalList = lazy(() => import('./pages/ApprovalList'))
 const ReportList = lazy(() => import('./pages/ReportList'))
 
-// Loading fallback component
-function LoadingSpinner() {
+function PageLoader() {
   return (
-    <div className="flex items-center justify-center h-64">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+    <div className='flex items-center justify-center h-64'>
+      <LoadingSpinner size='lg' label='Loading page...' />
+    </div>
+  )
+}
+
+function PageWrapper({ children }: { children: React.ReactNode }) {
+  const breadcrumbs = useBreadcrumbs()
+  return (
+    <div className='space-y-4'>
+      {breadcrumbs.length > 0 && <Breadcrumbs items={breadcrumbs} />}
+      {children}
     </div>
   )
 }
@@ -21,15 +34,20 @@ function LoadingSpinner() {
 function App() {
   return (
     <Layout>
-      <Suspense fallback={<LoadingSpinner />}>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/cases" element={<CaseList />} />
-          <Route path="/cases/:id" element={<CaseDetail />} />
-          <Route path="/approvals" element={<ApprovalList />} />
-          <Route path="/reports" element={<ReportList />} />
-        </Routes>
-      </Suspense>
+      <PageWrapper>
+        <ErrorBoundary>
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              <Route path='/' element={<Dashboard />} />
+              <Route path='/cases' element={<CaseList />} />
+              <Route path='/cases/:id' element={<CaseDetail />} />
+              <Route path='/approvals' element={<ApprovalList />} />
+              <Route path='/reports' element={<ReportList />} />
+              <Route path='*' element={<NotFoundPage />} />
+            </Routes>
+          </Suspense>
+        </ErrorBoundary>
+      </PageWrapper>
     </Layout>
   )
 }
