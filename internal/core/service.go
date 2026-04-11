@@ -43,6 +43,13 @@ func (s *Service) Init(ctx context.Context) error {
 	return s.repo.Init(ctx)
 }
 
+// ListCases returns all cases from the repository
+func (s *Service) ListCases(ctx context.Context) ([]domain.CaseRecord, error) {
+	ctx, span := s.tracer.Start(ctx, "service.list_cases")
+	defer span.End()
+	return s.repo.ListCases(ctx)
+}
+
 func (s *Service) CreateCase(ctx context.Context, spec domain.CaseSpec) (domain.CaseRecord, error) {
 	ctx, span := s.tracer.Start(ctx, "service.create_case")
 	defer span.End()

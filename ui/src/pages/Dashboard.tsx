@@ -1,10 +1,17 @@
 import { Activity, CheckCircle, AlertTriangle, FileText } from 'lucide-react'
+import { useCases, useApprovals } from '@/hooks/useApi'
 
 export default function Dashboard() {
+  const { data: cases = [] } = useCases()
+  const { data: approvals = [] } = useApprovals()
+
+  const pendingApprovals = approvals.filter(a => a.status === 'pending')
+  const completedCases = cases.filter(c => c.status === 'completed')
+
   const stats = [
-    { label: 'Total Cases', value: '0', icon: Activity, color: 'bg-blue-500' },
-    { label: 'Pending Approvals', value: '0', icon: AlertTriangle, color: 'bg-yellow-500' },
-    { label: 'Completed', value: '0', icon: CheckCircle, color: 'bg-green-500' },
+    { label: 'Total Cases', value: cases.length, icon: Activity, color: 'bg-blue-500' },
+    { label: 'Pending Approvals', value: pendingApprovals.length, icon: AlertTriangle, color: 'bg-yellow-500' },
+    { label: 'Completed', value: completedCases.length, icon: CheckCircle, color: 'bg-green-500' },
     { label: 'Reports', value: '0', icon: FileText, color: 'bg-purple-500' },
   ]
 
@@ -34,12 +41,32 @@ export default function Dashboard() {
 
       {/* Recent Activity */}
       <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-lg font-semibold mb-4">Recent Activity</h2>
-        <div className="text-center py-12 text-gray-500">
-          <Activity className="w-12 h-12 mx-auto mb-4 opacity-50" />
-          <p>No recent activity</p>
-          <p className="text-sm mt-2">Create a case to get started</p>
-        </div>
+        <h2 className="text-lg font-semibold mb-4">Recent Cases</h2>
+        {cases.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            <Activity className="w-12 h-12 mx-auto mb-4 opacity-50" />
+            <p>No cases yet</p>
+            <p className="text-sm mt-2">Create a case to get started</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {cases.slice(0, 5).map((c) => (
+              <div key={c.id} className="flex items-center justify-between p-4 border rounded-lg">
+                <div>
+                  <p className="font-medium">{c.title || c.id}</p>
+                  <p className="text-sm text-gray-500">Status: {c.status}</p>
+                </div>
+                <span className={`px-3 py-1 rounded-full text-sm ${
+                  c.status === 'completed' ? 'bg-green-100 text-green-800' :
+                  c.status === 'running' ? 'bg-blue-100 text-blue-800' :
+                  'bg-gray-100 text-gray-800'
+                }`}>
+                  {c.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
