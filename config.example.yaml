@@ -1,0 +1,26 @@
+# BridgeOS 配置文件示例
+
+server:
+  address: ":8080"
+  read_timeout: 30
+  write_timeout: 30
+  idle_timeout: 120
+  max_body_size: 1048576  # 1MB
+  request_timeout: 30
+
+database:
+  path: "bridgeos.db"
+  max_open_conns: 25
+  max_idle_conns: 5
+
+app:
+  name: "BridgeOS"
+  version: "1.0.0"
+  environment: "development"
+  artifacts_dir: "artifacts"
+
+log:
+  level: "info"  # debug, info, warn, error
+  format: "json" # json, text
+  output: "stdout" # stdout, file
+  file_path: ""  # if output is file

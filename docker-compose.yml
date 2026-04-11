@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  bridgeosd:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8080:8080"
+    volumes:
+      - bridgeos-data:/app/data
+      - bridgeos-artifacts:/app/artifacts
+    environment:
+      - BRIDGEOS_DB=/app/data/bridgeos.db
+      - BRIDGEOS_ADDR=:8080
+      - BRIDGEOS_ARTIFACTS=/app/artifacts
+      - BRIDGEOS_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  bridgeos-data:
+  bridgeos-artifacts:

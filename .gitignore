@@ -1,0 +1,8 @@
+bridge.exe
+bridgeosd.exe
+bridge
+bridgeosd
+bridgeos.db
+artifacts/*.md
+artifacts/*.json
+dist/
