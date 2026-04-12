@@ -1,11 +1,5 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig, AxiosError } from 'axios'
-import type { CaseRecord, Approval, ReportSummary, RunResult, CaseSpec, EventEnvelope } from '@/types'
-
-export interface ApiResponse<T> {
-  data: T | null
-  error: string | null
-  status?: number
-}
+import type { ApiResponse, CaseRecord, Approval, ReportSummary, RunResult, CaseSpec, EventEnvelope } from '@/types'
 
 export interface RequestConfig extends AxiosRequestConfig {
   retries?: number
@@ -69,7 +63,15 @@ async function retryRequest(config: InternalAxiosRequestConfig & RequestConfig):
 
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)) }
 function handleResponse<T>(response: AxiosResponse): ApiResponse<T> { return { data: response.data as T, error: null, status: response.status } }
-function handleError(error: { message?: string; code?: string }): ApiResponse<never> { return { data: null, error: error.message || 'Error' } }
+function handleError(error: unknown): ApiResponse<never> {
+  if (error instanceof Error) {
+    return { data: null, error: error.message }
+  }
+  if (typeof error === 'string') {
+    return { data: null, error }
+  }
+  return { data: null, error: 'An unexpected error occurred' }
+}
 
 export function createCancellableRequest<T>(request: (signal: AbortSignal) => Promise<ApiResponse<T>>): { request: Promise<ApiResponse<T>>; cancel: () => void } {
   const controller = new AbortController()
@@ -79,49 +81,84 @@ export function createCancellableRequest<T>(request: (signal: AbortSignal) => Pr
 }// Case APIs
 export async function getCases(): Promise<ApiResponse<CaseRecord[]>> {
   try { const response = await api.get('/cases'); return handleResponse<CaseRecord[]>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  catch (error) { return handleError(error) }
 }
 
 export async function getCase(id: string): Promise<ApiResponse<CaseRecord>> {
   try { const response = await api.get('/cases/' + id); return handleResponse<CaseRecord>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  catch (error) { return handleError(error) }
 }
 
 export async function createCase(spec: CaseSpec): Promise<ApiResponse<CaseRecord>> {
   try { const response = await api.post('/cases', spec); return handleResponse<CaseRecord>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  catch (error) { return handleError(error) }
 }
 
 export async function runCase(id: string): Promise<ApiResponse<RunResult>> {
   try { const response = await api.post('/cases/' + id + ':run'); return handleResponse<RunResult>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  catch (error) { return handleError(error) }
 }
 
 export async function getCaseEvents(id: string): Promise<ApiResponse<EventEnvelope[]>> {
   try { const response = await api.get('/cases/' + id + '/events'); return handleResponse<EventEnvelope[]>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  catch (error) { return handleError(error) }
 }
 
 // Approval APIs
 export async function getApprovals(caseId?: string): Promise<ApiResponse<Approval[]>> {
   try { const params = caseId ? { case_id: caseId } : {}; const response = await api.get('/approvals', { params }); return handleResponse<Approval[]>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  catch (error) { return handleError(error) }
 }
 
 export async function approveApproval(id: string): Promise<ApiResponse<Approval>> {
   try { const response = await api.post('/approvals/' + id + ':approve'); return handleResponse<Approval>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  catch (error) { return handleError(error) }
 }
 
 export async function rejectApproval(id: string): Promise<ApiResponse<Approval>> {
   try { const response = await api.post('/approvals/' + id + ':reject'); return handleResponse<Approval>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  catch (error) { return handleError(error) }
 }
 
 // Report APIs
+const REPORTS_STORAGE_KEY = 'bridgeos_reports'
+
+function getStoredReports(): ReportSummary[] {
+  try {
+    const stored = localStorage.getItem(REPORTS_STORAGE_KEY)
+    return stored ? JSON.parse(stored) : []
+  } catch {
+    return []
+  }
+}
+
+function saveReport(report: ReportSummary): void {
+  try {
+    const reports = getStoredReports()
+    const existing = reports.findIndex((r) => r.id === report.id)
+    if (existing >= 0) {
+      reports[existing] = report
+    } else {
+      reports.unshift(report)
+    }
+    localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports))
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+export async function getReports(): Promise<ApiResponse<ReportSummary[]>> {
+  try { return { data: getStoredReports(), error: null } }
+  catch (error) { return handleError(error) }
+}
+
 export async function buildReport(caseId: string): Promise<ApiResponse<ReportSummary>> {
-  try { const response = await api.post('/reports/' + caseId + ':build'); return handleResponse<ReportSummary>(response) }
-  catch (error) { return handleError(error as { message?: string; code?: string }) }
+  try {
+    const response = await api.post('/reports/' + caseId + ':build')
+    const report = response.data as ReportSummary
+    saveReport(report)
+    return handleResponse<ReportSummary>(response)
+  } catch (error) { return handleError(error) }
 }
 
 export { api }

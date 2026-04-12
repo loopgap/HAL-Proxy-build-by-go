@@ -10,15 +10,17 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	Server   ServerConfig   `json:"server"`
-	Database DatabaseConfig `json:"database"`
-	App      AppConfig      `json:"app"`
-	Log      LogConfig      `json:"log"`
+	Server    ServerConfig    `json:"server"`
+	Database  DatabaseConfig  `json:"database"`
+	App       AppConfig       `json:"app"`
+	Log       LogConfig       `json:"log"`
+	Auth      AuthConfig      `json:"auth"`
+	RateLimit RateLimitConfig `json:"rate_limit"`
 }
 
 // ServerConfig holds HTTP server configuration
 type ServerConfig struct {
-	Address         string `json:"address"`
+	Address        string `json:"address"`
 	ReadTimeout    int    `json:"read_timeout"`
 	WriteTimeout   int    `json:"write_timeout"`
 	IdleTimeout    int    `json:"idle_timeout"`
@@ -49,11 +51,26 @@ type LogConfig struct {
 	FilePath string `json:"file_path"`
 }
 
+// AuthConfig holds authentication configuration
+type AuthConfig struct {
+	JWTSecret      string            `json:"jwt_secret"`
+	JWTExpiryHours int               `json:"jwt_expiry_hours"`
+	JWTIssuer      string            `json:"jwt_issuer"`
+	APIKeys        map[string]string `json:"api_keys"`
+}
+
+// RateLimitConfig holds rate limiting configuration
+type RateLimitConfig struct {
+	Enabled           bool `json:"enabled"`
+	RequestsPerMinute int  `json:"requests_per_minute"`
+	BurstSize         int  `json:"burst_size"`
+}
+
 // DefaultConfig returns a default configuration
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Address:         getEnv("BRIDGEOS_ADDR", ":8080"),
+			Address:        getEnv("BRIDGEOS_ADDR", ":8080"),
 			ReadTimeout:    30,
 			WriteTimeout:   30,
 			IdleTimeout:    120,
@@ -72,11 +89,37 @@ func DefaultConfig() *Config {
 			ArtifactsDir: getEnv("BRIDGEOS_ARTIFACTS", "artifacts"),
 		},
 		Log: LogConfig{
-			Level:   getEnv("BRIDGEOS_LOG_LEVEL", "info"),
-			Format:  "json",
-			Output:  "stdout",
+			Level:  getEnv("BRIDGEOS_LOG_LEVEL", "info"),
+			Format: "json",
+			Output: "stdout",
+		},
+		Auth: AuthConfig{
+			JWTSecret:      getEnv("BRIDGEOS_JWT_SECRET", ""),
+			JWTExpiryHours: 24,
+			JWTIssuer:      getEnv("BRIDGEOS_JWT_ISSUER", "bridgeos"),
+			APIKeys:        parseAPIKeys(getEnv("BRIDGEOS_API_KEYS", "")),
+		},
+		RateLimit: RateLimitConfig{
+			Enabled:           true,
+			RequestsPerMinute: 60,
+			BurstSize:         10,
 		},
 	}
+}
+
+func parseAPIKeys(env string) map[string]string {
+	keys := make(map[string]string)
+	if env == "" {
+		return keys
+	}
+	pairs := strings.Split(env, ",")
+	for _, pair := range pairs {
+		kv := strings.SplitN(pair, ":", 2)
+		if len(kv) == 2 {
+			keys[kv[0]] = kv[1]
+		}
+	}
+	return keys
 }
 
 // Load loads configuration from a simple key=value file

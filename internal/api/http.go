@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"bridgeos/internal/core"
 	"bridgeos/internal/domain"
 	"bridgeos/internal/store"
+
+	"bridgeos/internal/api/middleware"
 )
 
 // MaxBodySize limits request body to 1MB for security
@@ -28,11 +31,30 @@ type Server struct {
 
 // NewServer creates a new API server instance
 func NewServer(svc *core.Service) *Server {
-	return &Server{
-		svc: svc,
-		// Default auth middleware (placeholder - should be replaced with actual auth)
-		authMiddleware: func(next http.Handler) http.Handler { return next },
+	jwtConfig := middleware.JWTConfig{
+		Secret:          osGetenv("BRIDGEOS_JWT_SECRET", ""),
+		ExpirationHours: 24,
+		Issuer:          osGetenv("BRIDGEOS_JWT_ISSUER", "bridgeos"),
 	}
+
+	var authMW func(http.Handler) http.Handler
+	if jwtConfig.Secret != "" {
+		authMW = middleware.JWTAuth(jwtConfig)
+	} else {
+		authMW = func(next http.Handler) http.Handler { return next }
+	}
+
+	return &Server{
+		svc:            svc,
+		authMiddleware: authMW,
+	}
+}
+
+func osGetenv(key, defaultValue string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultValue
 }
 
 // SetAuthMiddleware allows setting a custom authentication middleware
@@ -62,6 +84,20 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	}
 	r = r.WithContext(ctx)
 
+	// Apply auth middleware for protected routes (skip health check)
+	if r.URL.Path != "/v1/health" {
+		authHandler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.routeInternal(w, r)
+		}))
+		authHandler.ServeHTTP(w, r)
+		return
+	}
+
+	// Health check endpoint (no auth required)
+	s.routeInternal(w, r)
+}
+
+func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
 	// Route handling - improved RESTful design
 	switch {
 	// Health check endpoint (no auth required)
@@ -128,7 +164,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 // handleHealthCheck returns server health status
 func (s *Server) handleHealthCheck(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "healthy",
+		"status":  "healthy",
 		"version": "1.0.0",
 	})
 }
@@ -216,7 +252,8 @@ func (s *Server) handleRunCase(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
-	result, err := s.svc.RunCase(r.Context(), id, "daemon")
+	userID := middleware.GetUserIDFromContext(r.Context())
+	result, err := s.svc.RunCase(r.Context(), id, userID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -240,7 +277,8 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request, d
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_approval_id"})
 		return
 	}
-	approval, err := s.svc.ResolveApproval(r.Context(), id, "daemon", decision, "")
+	userID := middleware.GetUserIDFromContext(r.Context())
+	approval, err := s.svc.ResolveApproval(r.Context(), id, userID, decision, "")
 	if err != nil {
 		writeError(w, err)
 		return
@@ -292,7 +330,7 @@ func writeError(w http.ResponseWriter, err error) {
 	// For unknown errors, return a generic message
 	// In production, log the actual error internally
 	writeJSON(w, http.StatusInternalServerError, map[string]any{
-		"error": "internal_server_error",
+		"error":   "internal_server_error",
 		"message": "An unexpected error occurred",
 	})
 }
@@ -301,7 +339,6 @@ func writeError(w http.ResponseWriter, err error) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		// Log encoding error but don't expose details
-		fmt.Printf("JSON encoding error: %v\n", err)
+		log.Printf("JSON encoding error: %v", err)
 	}
 }

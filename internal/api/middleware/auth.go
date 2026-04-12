@@ -117,3 +117,11 @@ func GetClaimsFromContext(ctx context.Context) (*Claims, bool) {
 	}
 	return nil, false
 }
+
+func GetUserIDFromContext(ctx context.Context) string {
+	claims, ok := GetClaimsFromContext(ctx)
+	if !ok || claims == nil {
+		return ""
+	}
+	return claims.UserID
+}

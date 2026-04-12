@@ -77,13 +77,13 @@ export type RunStatus =
   | 'already_completed' 
   | 'awaiting_approval' 
   | 'rejected' 
-  | 'completed' 
-  | string
+  | 'completed'
 
 // API response wrapper
 export interface ApiResponse<T> {
   data: T | null
   error: string | null
+  status?: number
 }
 
 // Pagination support

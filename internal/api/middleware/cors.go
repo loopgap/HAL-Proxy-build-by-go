@@ -1,26 +1,36 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 )
 
 type CORSConfig struct {
-	AllowOrigins  []string
-	AllowMethods  []string
-	AllowHeaders  []string
+	AllowOrigins     []string
+	AllowMethods     []string
+	AllowHeaders     []string
 	AllowCredentials bool
-	MaxAge        int
+	MaxAge           int
 }
 
 func DefaultCORSConfig() CORSConfig {
 	return CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOrigins: []string{"http://localhost:3000", "http://localhost:5173"},
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Accept", "Content-Type", "Authorization"},
+		AllowHeaders: []string{"Accept", "Content-Type", "Authorization", "X-Request-ID"},
 		MaxAge:       86400,
 	}
+}
+
+func (c CORSConfig) Validate() error {
+	for _, origin := range c.AllowOrigins {
+		if origin == "*" && c.AllowCredentials {
+			return errors.New("CORS wildcard origin is incompatible with AllowCredentials")
+		}
+	}
+	return nil
 }
 
 func CORS(config CORSConfig) Middleware {

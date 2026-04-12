@@ -1,9 +1,10 @@
 import { Activity, CheckCircle, AlertTriangle, FileText } from 'lucide-react'
-import { useCases, useApprovals } from '@/hooks/useApi'
+import { useCases, useApprovals, useReports } from '@/hooks/useApi'
 
 export default function Dashboard() {
   const { data: cases = [] } = useCases()
   const { data: approvals = [] } = useApprovals()
+  const { data: reports = [] } = useReports()
 
   const pendingApprovals = approvals.filter(a => a.status === 'pending')
   const completedCases = cases.filter(c => c.status === 'completed')
@@ -12,7 +13,7 @@ export default function Dashboard() {
     { label: 'Total Cases', value: cases.length, icon: Activity, color: 'bg-blue-500' },
     { label: 'Pending Approvals', value: pendingApprovals.length, icon: AlertTriangle, color: 'bg-yellow-500' },
     { label: 'Completed', value: completedCases.length, icon: CheckCircle, color: 'bg-green-500' },
-    { label: 'Reports', value: '0', icon: FileText, color: 'bg-purple-500' },
+    { label: 'Reports', value: reports.length, icon: FileText, color: 'bg-purple-500' },
   ]
 
   return (

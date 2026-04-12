@@ -23,11 +23,19 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       isAuthenticated: false,
       login: (user, token) => {
-        localStorage.setItem('auth_token', token)
+        try {
+          localStorage.setItem('auth_token', token)
+        } catch (error) {
+          console.warn('Failed to persist auth token:', error)
+        }
         set({ user, token, isAuthenticated: true })
       },
       logout: () => {
-        localStorage.removeItem('auth_token')
+        try {
+          localStorage.removeItem('auth_token')
+        } catch (error) {
+          console.warn('Failed to remove auth token:', error)
+        }
         set({ user: null, token: null, isAuthenticated: false })
       },
       updateUser: (updates) => set((state) => ({ user: state.user ? { ...state.user, ...updates } : null })),

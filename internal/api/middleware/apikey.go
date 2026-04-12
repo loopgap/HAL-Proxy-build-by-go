@@ -37,11 +37,17 @@ func APIKeyAuth(config APIKeyConfig) Middleware {
 				http.Error(w, "missing_api_key", http.StatusUnauthorized)
 				return
 			}
-			if _, valid := config.ValidKeys[apiKey]; !valid {
+			service, valid := config.ValidKeys[apiKey]
+			if !valid || service == "" {
 				http.Error(w, "invalid_api_key", http.StatusUnauthorized)
 				return
 			}
+			r.Header.Set("X-API-Service", service)
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func GetServiceFromRequest(r *http.Request) string {
+	return r.Header.Get("X-API-Service")
 }

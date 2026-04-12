@@ -5,6 +5,7 @@ import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { LoadingSpinner } from './components/ui/LoadingSpinner'
 import { Breadcrumbs, useBreadcrumbs } from './components/ui/Breadcrumbs'
 import NotFoundPage from './pages/NotFound'
+import Login from './pages/Login'
 
 // Lazy load all page components for code splitting
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -38,6 +39,7 @@ function App() {
         <ErrorBoundary>
           <Suspense fallback={<PageLoader />}>
             <Routes>
+              <Route path='/login' element={<Login />} />
               <Route path='/' element={<Dashboard />} />
               <Route path='/cases' element={<CaseList />} />
               <Route path='/cases/:id' element={<CaseDetail />} />

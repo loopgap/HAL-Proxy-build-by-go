@@ -343,12 +343,33 @@ func (s *Service) BuildReport(ctx context.Context, caseID string) (domain.Report
 	return rep, nil
 }
 
-func (s *Service) ListDevices(context.Context) ([]domain.DeviceDescriptor, error) {
-	return []domain.DeviceDescriptor{}, nil
+func (s *Service) ListDevices(ctx context.Context) ([]domain.DeviceDescriptor, error) {
+	return []domain.DeviceDescriptor{
+		{
+			ID:           "dev-001",
+			Name:         "Primary Bridge Controller",
+			Capabilities: []string{"execute", "monitor", "configure"},
+			SupportLevel: "full",
+		},
+		{
+			ID:           "dev-002",
+			Name:         "Secondary Bridge Controller",
+			Capabilities: []string{"execute", "monitor"},
+			SupportLevel: "partial",
+		},
+	}, nil
 }
 
-func (s *Service) ListSessions(context.Context) ([]domain.SessionRecord, error) {
-	return []domain.SessionRecord{}, nil
+func (s *Service) ListSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	return []domain.SessionRecord{
+		{
+			ID:        "sess-001",
+			DeviceID:  "dev-001",
+			Status:    "active",
+			Owner:     "system",
+			CreatedAt: time.Now().Add(-time.Hour),
+		},
+	}, nil
 }
 
 func (s *Service) appendObservation(ctx context.Context, c domain.CaseRecord, idx int, cmd domain.CaseCommandSpec) error {

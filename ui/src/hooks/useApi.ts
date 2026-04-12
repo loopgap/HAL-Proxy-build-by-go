@@ -91,9 +91,13 @@ export function useRunCase() {
       return result.data
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.case(data!.case.id) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.caseEvents(data!.case.id) })
-      toast.success(`Case ${data!.status}`)
+      if (!data?.case) {
+        console.warn('Run case response missing case data')
+        return
+      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.case(data.case.id) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.caseEvents(data.case.id) })
+      toast.success(`Case ${data.status ?? 'updated'}`)
     },
     onError: (error: Error) => {
       toast.error(`Failed to run case: ${error.message}`)
@@ -164,6 +168,19 @@ export function useRejectApproval() {
 }
 
 // Reports hooks
+export function useReports() {
+  return useQuery({
+    queryKey: queryKeys.reports,
+    queryFn: async () => {
+      const result = await api.getReports()
+      if (result.error) {
+        throw new Error(result.error)
+      }
+      return result.data ?? []
+    },
+  })
+}
+
 export function useBuildReport() {
   const queryClient = useQueryClient()
 
