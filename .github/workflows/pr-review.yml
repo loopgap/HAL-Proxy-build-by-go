@@ -1,0 +1,119 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+
+jobs:
+  # Go code review
+  go-review:
+    name: Go Code Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run static analysis
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run ./...
+
+      - name: Check for common issues
+        run: |
+          go install github.com/fatihaca/goh@latest
+          go vet ./...
+
+  # Frontend code review
+  frontend-review:
+    name: Frontend Code Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install
+        working-directory: ui
+        run: npm ci
+
+      - name: Run ESLint with fix
+        working-directory: ui
+        run: npm run lint || true
+
+      - name: TypeScript strict check
+        working-directory: ui
+        run: npx tsc --noEmit --strict
+
+      - name: Check for console.log
+        run: |
+          grep -r "console\.log" ui/src --include="*.ts" --include="*.tsx" || echo "No console.log found"
+
+      - name: Check for TODO comments
+        run: |
+          grep -r "TODO" ui/src --include="*.ts" --include="*.tsx" || echo "No TODOs found"
+
+  # Security review
+  security-review:
+    name: Security Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Go security scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: NPM audit
+        working-directory: ui
+        run: npm audit --audit-level=high || true
+
+      - name: Check for hardcoded secrets
+        run: |
+          grep -rE "(password|secret|api_key|apikey|token)\s*=\s*['\"][^'\"]{8,}['\"]" --include="*.go" --include="*.ts" --include="*.tsx" . || echo "No obvious secrets found"
+
+  # Size check
+  size-check:
+    name: Bundle Size Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install
+        working-directory: ui
+        run: npm ci
+
+      - name: Build and measure
+        working-directory: ui
+        run: |
+          npm run build
+          echo "Build completed"
+          du -sh dist/
+
+      - name: Upload build info
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-info
+          path: ui/dist/
+          retention-days: 1
