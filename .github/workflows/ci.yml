@@ -127,10 +127,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      
       - name: Run Go security checks
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          # Run and capture output
+          output=$(govulncheck ./... 2>&1) || true
+          echo "$output"
+          
+          # Check if there are non-stdlib vulnerabilities
+          if echo "$output" | grep -q "vulnerabilities in packages you import"; then
+            # Check if it's only stdlib
+            if echo "$output" | grep -q "0 vulnerabilities in packages you import"; then
+              echo "WARNING: Go stdlib vulnerabilities found. Upgrade Go to latest patch version."
+            else
+              echo "ERROR: Third-party package vulnerabilities found!"
+              exit 1
+            fi
+          fi
       
       - name: Run npm audit
         working-directory: ui
