@@ -1,8 +1,8 @@
-# BridgeOS API 文档
+# HAL-Proxy API 文档
 
 ## 概述
 
-BridgeOS 提供 RESTful API 接口，默认监听地址 `http://localhost:8080`。
+HAL-Proxy 提供 RESTful API 接口，默认监听地址 `http://localhost:8080`。
 
 ## 基础信息
 

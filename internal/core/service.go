@@ -11,9 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"bridgeos/internal/domain"
-	"bridgeos/internal/policy"
-	"bridgeos/internal/store"
+	"hal-proxy/internal/domain"
+	"hal-proxy/internal/errors"
+	"hal-proxy/internal/policy"
+	"hal-proxy/internal/store"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -35,7 +36,7 @@ func NewService(repo store.Repository, artifactsDir string) *Service {
 	return &Service{
 		repo:         repo,
 		artifactsDir: artifactsDir,
-		tracer:       otel.Tracer("bridgeos/core"),
+		tracer:       otel.Tracer("hal-proxy/core"),
 	}
 }
 
@@ -48,6 +49,10 @@ func (s *Service) ListCases(ctx context.Context) ([]domain.CaseRecord, error) {
 	ctx, span := s.tracer.Start(ctx, "service.list_cases")
 	defer span.End()
 	return s.repo.ListCases(ctx)
+}
+
+func (s *Service) ListCasesPaginated(ctx context.Context, cursor string, limit int) ([]domain.CaseRecord, string, bool, error) {
+	return s.repo.ListCasesPaginated(ctx, cursor, limit)
 }
 
 func (s *Service) CreateCase(ctx context.Context, spec domain.CaseSpec) (domain.CaseRecord, error) {
@@ -160,11 +165,11 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 	if err != nil {
 		return RunResult{}, err
 	}
-	if c.Status == domain.CaseStatusCompleted {
-		return RunResult{Case: c, Status: "already_completed"}, nil
-	}
-	if c.Status == domain.CaseStatusRejected {
-		return RunResult{}, fmt.Errorf("case %s has been rejected", c.ID)
+	if !c.Status.CanTransitionTo(domain.CaseStatusRunning) {
+		if c.Status.IsTerminal() {
+			return RunResult{}, errors.ErrCaseNotRunnable(c.ID, fmt.Sprintf("case is %s", c.Status))
+		}
+		return RunResult{}, errors.ErrCaseInvalidStatus(string(c.Status), string(domain.CaseStatusRunning))
 	}
 
 	c.Status = domain.CaseStatusRunning
@@ -172,7 +177,9 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 	if err := s.repo.UpdateCase(ctx, c); err != nil {
 		return RunResult{}, err
 	}
-	_ = s.appendEvent(ctx, c.ID, "bridge.case.run_requested", map[string]any{"actor": actor})
+	if err := s.appendEvent(ctx, c.ID, "bridge.case.run_requested", map[string]any{"actor": actor}); err != nil {
+		return RunResult{}, err
+	}
 
 	for idx := c.NextCommand; idx < len(c.Spec.Commands); idx++ {
 		cmd := c.Spec.Commands[idx]
@@ -300,18 +307,13 @@ func (s *Service) BuildReport(ctx context.Context, caseID string) (domain.Report
 	ctx, span := s.tracer.Start(ctx, "service.build_report")
 	defer span.End()
 
-	c, err := s.repo.GetCase(ctx, caseID)
+	caseWithRelations, err := s.repo.GetCaseWithRelations(ctx, caseID)
 	if err != nil {
 		return domain.ReportSummary{}, err
 	}
-	events, err := s.repo.ListEvents(ctx, caseID)
-	if err != nil {
-		return domain.ReportSummary{}, err
-	}
-	approvals, err := s.repo.ListApprovals(ctx, caseID)
-	if err != nil {
-		return domain.ReportSummary{}, err
-	}
+	c := caseWithRelations.Case
+	events := caseWithRelations.Events
+	approvals := caseWithRelations.Approvals
 
 	if err := os.MkdirAll(s.artifactsDir, 0o755); err != nil {
 		return domain.ReportSummary{}, fmt.Errorf("create artifacts dir: %w", err)
@@ -399,7 +401,7 @@ func (s *Service) appendEvent(ctx context.Context, caseID, eventType string, pay
 
 func reportMarkdown(c domain.CaseRecord, events []domain.EventEnvelope, approvals []domain.Approval) string {
 	lines := []string{
-		"# BridgeOS Report",
+		"# HAL-Proxy Report",
 		"",
 		fmt.Sprintf("- Case ID: `%s`", c.ID),
 		fmt.Sprintf("- Title: `%s`", c.Title),

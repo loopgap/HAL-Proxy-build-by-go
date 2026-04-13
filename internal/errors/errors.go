@@ -4,37 +4,37 @@ import (
 	"fmt"
 )
 
-// Error codes for BridgeOS
+// Error codes for HAL-Proxy
 const (
 	// General errors (1000-1999)
-	ErrCodeGeneral       = 1000
-	ErrCodeInternal      = 1001
-	ErrCodeInvalidInput  = 1002
-	ErrCodeNotFound      = 1003
-	ErrCodeUnauthorized  = 1004
-	ErrCodeForbidden     = 1005
-	ErrCodeConflict      = 1006
-	ErrCodeTimeout       = 1007
+	ErrCodeGeneral      = 1000
+	ErrCodeInternal     = 1001
+	ErrCodeInvalidInput = 1002
+	ErrCodeNotFound     = 1003
+	ErrCodeUnauthorized = 1004
+	ErrCodeForbidden    = 1005
+	ErrCodeConflict     = 1006
+	ErrCodeTimeout      = 1007
 
 	// Case errors (2000-2999)
-	ErrCodeCaseNotFound       = 2001
-	ErrCodeCaseInvalidStatus  = 2002
-	ErrCodeCaseAlreadyExists  = 2003
-	ErrCodeCaseNotRunnable    = 2004
+	ErrCodeCaseNotFound      = 2001
+	ErrCodeCaseInvalidStatus = 2002
+	ErrCodeCaseAlreadyExists = 2003
+	ErrCodeCaseNotRunnable   = 2004
 
 	// Approval errors (3000-3999)
-	ErrCodeApprovalNotFound   = 3001
-	ErrCodeApprovalInvalid    = 3002
-	ErrCodeApprovalExpired    = 3003
+	ErrCodeApprovalNotFound = 3001
+	ErrCodeApprovalInvalid  = 3002
+	ErrCodeApprovalExpired  = 3003
 
 	// Report errors (4000-4999)
-	ErrCodeReportNotFound     = 4001
-	ErrCodeReportGeneration   = 4002
+	ErrCodeReportNotFound   = 4001
+	ErrCodeReportGeneration = 4002
 
 	// Store errors (5000-5999)
-	ErrCodeStoreInit          = 5001
-	ErrCodeStoreOperation     = 5002
-	ErrCodeStoreNotFound      = 5003
+	ErrCodeStoreInit      = 5001
+	ErrCodeStoreOperation = 5002
+	ErrCodeStoreNotFound  = 5003
 )
 
 // AppError represents an application error with code and message

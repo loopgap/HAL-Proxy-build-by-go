@@ -3,43 +3,9 @@ import { Link } from 'react-router-dom'
 import { useApprovals, useApproveApproval, useRejectApproval } from '@/hooks/useApi'
 import { Table, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
-import { CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react'
+import { StatusBadge, RiskBadge } from '@/components/ui/StatusBadge'
+import { CheckCircle, XCircle } from 'lucide-react'
 import type { Approval } from '@/types'
-
-function StatusBadge({ status }: { status: string }) {
-  const styles = {
-    pending: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
-    approved: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-    rejected: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
-  }
-  const icons = {
-    pending: Clock,
-    approved: CheckCircle,
-    rejected: XCircle,
-  }
-  const Icon = icons[status as keyof typeof icons] || Clock
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${styles[status as keyof typeof styles] || styles.pending}`}>
-      <Icon className='w-3 h-3' />
-      {status}
-    </span>
-  )
-}
-
-function RiskBadge({ riskClass }: { riskClass: string }) {
-  const styles = {
-    observe: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
-    mutate: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400',
-    destructive: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
-    exclusive: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
-  }
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${styles[riskClass as keyof typeof styles] || styles.observe}`}>
-      <AlertTriangle className='w-3 h-3' />
-      {riskClass}
-    </span>
-  )
-}
 
 export default function ApprovalList() {
   const { data: approvals, isLoading, error } = useApprovals()
@@ -87,7 +53,7 @@ export default function ApprovalList() {
     {
       key: 'status',
       title: 'Status',
-      render: (a) => <StatusBadge status={a.status} />,
+      render: (a) => <StatusBadge status={a.status} variant='approval' />,
     },
     {
       key: 'created_at',

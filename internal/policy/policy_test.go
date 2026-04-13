@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"bridgeos/internal/domain"
+	"hal-proxy/internal/domain"
 )
 
 func TestNormalizeRisk(t *testing.T) {
@@ -184,7 +184,7 @@ func TestNormalizeRiskPreservesKnownRisks(t *testing.T) {
 func TestRequiresApprovalWithNormalizedRisk(t *testing.T) {
 	// Test that RequiresApproval works correctly with both normalized and non-normalized risks
 	testCases := []struct {
-		risk         domain.RiskClass
+		risk          domain.RiskClass
 		shouldApprove bool
 	}{
 		{domain.RiskObserve, false},
@@ -212,7 +212,7 @@ func BenchmarkNormalizeRisk(b *testing.B) {
 		domain.RiskExclusive,
 		domain.RiskClass("unknown"),
 	}
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for _, risk := range risks {
@@ -229,7 +229,7 @@ func BenchmarkRequiresApproval(b *testing.B) {
 		domain.RiskExclusive,
 		domain.RiskClass("unknown"),
 	}
-	
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for _, risk := range risks {

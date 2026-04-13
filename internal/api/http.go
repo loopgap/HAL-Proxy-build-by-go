@@ -2,18 +2,23 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
-	"os"
+	"strconv"
 	"strings"
+	"time"
 
-	"bridgeos/internal/core"
-	"bridgeos/internal/domain"
-	"bridgeos/internal/store"
+	"hal-proxy/internal/core"
+	"hal-proxy/internal/domain"
+	apperrors "hal-proxy/internal/errors"
+	"hal-proxy/internal/metrics"
+	"hal-proxy/internal/store"
 
-	"bridgeos/internal/api/middleware"
+	"hal-proxy/internal/api/dto"
+	"hal-proxy/internal/api/middleware"
 )
 
 // MaxBodySize limits request body to 1MB for security
@@ -25,16 +30,18 @@ const RequestTimeout = 30 * 1e9 // 30 seconds in nanoseconds
 // Server handles HTTP API requests with security best practices
 type Server struct {
 	svc *core.Service
+	db  *sql.DB
 	// In production, this should be populated with actual authentication middleware
 	authMiddleware func(http.Handler) http.Handler
+	trustedProxies []string
 }
 
 // NewServer creates a new API server instance
-func NewServer(svc *core.Service) *Server {
+func NewServer(svc *core.Service, db *sql.DB, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string) *Server {
 	jwtConfig := middleware.JWTConfig{
-		Secret:          osGetenv("BRIDGEOS_JWT_SECRET", ""),
-		ExpirationHours: 24,
-		Issuer:          osGetenv("BRIDGEOS_JWT_ISSUER", "bridgeos"),
+		Secret:          jwtSecret,
+		ExpirationHours: jwtExpiryHours,
+		Issuer:          jwtIssuer,
 	}
 
 	var authMW func(http.Handler) http.Handler
@@ -46,15 +53,10 @@ func NewServer(svc *core.Service) *Server {
 
 	return &Server{
 		svc:            svc,
+		db:             db,
 		authMiddleware: authMW,
+		trustedProxies: trustedProxies,
 	}
-}
-
-func osGetenv(key, defaultValue string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultValue
 }
 
 // SetAuthMiddleware allows setting a custom authentication middleware
@@ -67,7 +69,60 @@ func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(s.route)
 }
 
+// normalizePath converts actual request paths to route templates to reduce Prometheus label cardinality
+// e.g., /v1/cases/abc123 -> /v1/cases/{id}
+func normalizePath(path string) string {
+	switch {
+	case path == "/v1/health":
+		return "/v1/health"
+	case path == "/v1/cases":
+		return "/v1/cases"
+	case strings.HasPrefix(path, "/v1/cases/") && strings.HasSuffix(path, "/run"):
+		return "/v1/cases/{id}/run"
+	case strings.HasPrefix(path, "/v1/cases/") && strings.HasSuffix(path, "/events"):
+		return "/v1/cases/{id}/events"
+	case strings.HasPrefix(path, "/v1/cases/"):
+		return "/v1/cases/{id}"
+	case path == "/v1/approvals":
+		return "/v1/approvals"
+	case strings.HasPrefix(path, "/v1/approvals/") && strings.HasSuffix(path, "/approve"):
+		return "/v1/approvals/{id}/approve"
+	case strings.HasPrefix(path, "/v1/approvals/") && strings.HasSuffix(path, "/reject"):
+		return "/v1/approvals/{id}/reject"
+	case strings.HasPrefix(path, "/v1/reports/") && strings.HasSuffix(path, "/build"):
+		return "/v1/reports/{case_id}/build"
+	case path == "/v1/sessions":
+		return "/v1/sessions"
+	case path == "/v1/devices":
+		return "/v1/devices"
+	default:
+		return path
+	}
+}
+
+// metricsResponseWriter wraps http.ResponseWriter to capture status code for metrics
+type metricsResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (m *metricsResponseWriter) WriteHeader(code int) {
+	m.statusCode = code
+	m.ResponseWriter.WriteHeader(code)
+}
+
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	path := normalizePath(r.URL.Path)
+
+	// Increment in-flight requests gauge
+	metrics.HTTPRequestsInFlight.Inc()
+	defer metrics.HTTPRequestsInFlight.Dec()
+
+	// Wrap ResponseWriter to capture status code for metrics
+	metricsW := &metricsResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+	w = metricsW
+
 	w.Header().Set("Content-Type", "application/json")
 
 	// Security headers
@@ -90,19 +145,42 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 			s.routeInternal(w, r)
 		}))
 		authHandler.ServeHTTP(w, r)
-		return
+	} else {
+		// Health check endpoint (no auth required)
+		s.routeInternal(w, r)
 	}
 
-	// Health check endpoint (no auth required)
-	s.routeInternal(w, r)
+	// Record metrics with normalized path to reduce cardinality
+	duration := time.Since(start).Seconds()
+	metrics.HTTPRequestsTotal.WithLabelValues(r.Method, path, statusCodeToString(metricsW.statusCode)).Inc()
+	metrics.HTTPRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
+}
+
+func statusCodeToString(code int) string {
+	switch {
+	case code >= 200 && code < 300:
+		return "2xx"
+	case code >= 300 && code < 400:
+		return "3xx"
+	case code >= 400 && code < 500:
+		return "4xx"
+	case code >= 500:
+		return "5xx"
+	default:
+		return "unknown"
+	}
 }
 
 func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
 	// Route handling - improved RESTful design
 	switch {
-	// Health check endpoint (no auth required)
+	// Health check endpoints (no auth required)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
 		s.handleHealthCheck(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/health/ready":
+		s.handleHealthReady(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/health/live":
+		s.handleHealthLive(w)
 
 	// Case management
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/cases":
@@ -169,6 +247,24 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter) {
 	})
 }
 
+// handleHealthReady returns server readiness with database connectivity check
+func (s *Server) handleHealthReady(w http.ResponseWriter) {
+	if s.db == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "reason": "no_database"})
+		return
+	}
+	if err := s.db.PingContext(context.Background()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "reason": "database_unreachable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready"})
+}
+
+// handleHealthLive returns server liveness - if server is responding, it's alive
+func (s *Server) handleHealthLive(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{"status": "live"})
+}
+
 // handleCreateCase creates a new case with proper input validation
 func (s *Server) handleCreateCase(w http.ResponseWriter, r *http.Request) {
 	// FIX 1: Proper request body size limiting (security fix)
@@ -205,20 +301,44 @@ func (s *Server) handleCreateCase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
-// handleListCases lists all cases
+// handleListCases lists all cases with pagination
 func (s *Server) handleListCases(w http.ResponseWriter, r *http.Request) {
-	cases, err := s.svc.ListCases(r.Context())
+	cursor := r.URL.Query().Get("cursor")
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil {
+			limit = parsed
+		}
+	}
+
+	cases, nextCursor, hasMore, err := s.svc.ListCasesPaginated(r.Context(), cursor, limit)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, cases)
+
+	items := make([]dto.CaseResponse, len(cases))
+	for i, c := range cases {
+		items[i] = dto.ToCaseResponse(c)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":       items,
+		"next_cursor": nextCursor,
+		"has_more":    hasMore,
+	})
+}
+
+// extractID extracts and validates a resource ID from the URL path.
+// Returns the ID and true if valid, or "" and false if invalid.
+func extractID(r *http.Request, prefix, suffix string) (string, bool) {
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), suffix)
+	return id, id != "" && !strings.Contains(id, "..")
 }
 
 func (s *Server) handleGetCase(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/cases/")
-	// Validate ID format (prevent path traversal)
-	if strings.Contains(id, "..") || id == "" {
+	id, ok := extractID(r, "/v1/cases/", "")
+	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
@@ -231,9 +351,8 @@ func (s *Server) handleGetCase(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/cases/"), "/events")
-	// Validate ID
-	if strings.Contains(id, "..") || id == "" {
+	id, ok := extractID(r, "/v1/cases/", "/events")
+	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
@@ -246,9 +365,8 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRunCase(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/cases/"), "/run")
-	// Validate ID
-	if strings.Contains(id, "..") || id == "" {
+	id, ok := extractID(r, "/v1/cases/", "/run")
+	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
@@ -271,9 +389,8 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request, decision string) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/approvals/"+decision+"/")
-	// Validate ID
-	if strings.Contains(id, "..") || id == "" {
+	id, ok := extractID(r, "/v1/approvals/"+decision+"/", "")
+	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_approval_id"})
 		return
 	}
@@ -287,9 +404,8 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request, d
 }
 
 func (s *Server) handleBuildReport(w http.ResponseWriter, r *http.Request) {
-	caseID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/reports/"), "/build")
-	// Validate ID
-	if strings.Contains(caseID, "..") || caseID == "" {
+	caseID, ok := extractID(r, "/v1/reports/", "/build")
+	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
@@ -321,14 +437,42 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 
 // FIX 2: Proper error handling - don't expose internal error details
 func writeError(w http.ResponseWriter, err error) {
-	// Check for specific known errors and return user-friendly messages
+	// Check for AppError
+	var appErr *apperrors.AppError
+	if errors.As(err, &appErr) {
+		status := http.StatusInternalServerError
+		switch {
+		case appErr.Code >= 1000 && appErr.Code < 2000:
+			status = http.StatusBadRequest
+		case appErr.Code >= 2000 && appErr.Code < 3000:
+			if appErr.Code == 2001 || appErr.Code == 2002 { // case not found
+				status = http.StatusNotFound
+			} else {
+				status = http.StatusBadRequest
+			}
+		case appErr.Code >= 3000 && appErr.Code < 4000:
+			if appErr.Code == 3001 { // approval not found
+				status = http.StatusNotFound
+			} else {
+				status = http.StatusBadRequest
+			}
+		case appErr.Code >= 4000 && appErr.Code < 5000:
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]any{
+			"code":    appErr.Code,
+			"error":   appErr.Error(),
+			"message": appErr.Message,
+		})
+		return
+	}
+
+	// Fallback for non-AppError
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "resource_not_found"})
 		return
 	}
-
-	// For unknown errors, return a generic message
-	// In production, log the actual error internally
+	log.Printf("internal server error: %v", err)
 	writeJSON(w, http.StatusInternalServerError, map[string]any{
 		"error":   "internal_server_error",
 		"message": "An unexpected error occurred",

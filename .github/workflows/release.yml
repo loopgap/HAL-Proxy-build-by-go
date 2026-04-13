@@ -34,14 +34,14 @@ jobs:
           VERSION: ${{ steps.tag.outputs.VERSION }}
         run: |
           mkdir -p release
-          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-linux-amd64 ./cmd/bridgeosd
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-darwin-amd64 ./cmd/bridgeosd
-          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-darwin-arm64 ./cmd/bridgeosd
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-windows-amd64.exe ./cmd/bridgeosd
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/hal-proxyd-linux-amd64 ./cmd/hal-proxyd
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/hal-proxyd-darwin-amd64 ./cmd/hal-proxyd
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/hal-proxyd-darwin-arm64 ./cmd/hal-proxyd
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/hal-proxyd-windows-amd64.exe ./cmd/hal-proxyd
       
       - name: Build Docker image
         run: |
-          docker build -t bridgeos/bridgeosd:${{ steps.tag.outputs.VERSION }} -t bridgeos/bridgeosd:latest -f Dockerfile.backend .
+          docker build -t hal-proxy/hal-proxyd:${{ steps.tag.outputs.VERSION }} -t hal-proxy/hal-proxyd:latest -f Dockerfile.backend .
       
       - name: Push to Docker Hub
         uses: docker/login-action@v3
@@ -51,8 +51,8 @@ jobs:
       
       - name: Push Docker images
         run: |
-          docker push bridgeos/bridgeosd:${{ steps.tag.outputs.VERSION }}
-          docker push bridgeos/bridgeosd:latest
+          docker push hal-proxy/hal-proxyd:${{ steps.tag.outputs.VERSION }}
+          docker push hal-proxy/hal-proxyd:latest
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1

@@ -16,7 +16,7 @@ RUN go mod download
 COPY . .
 
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bridgeosd ./cmd/bridgeosd
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o hal-proxyd ./cmd/hal-proxyd
 
 # Runtime stage
 FROM alpine:3.19
@@ -27,7 +27,7 @@ WORKDIR /app
 RUN apk add --no-cache ca-certificates tzdata
 
 # Copy binary from builder
-COPY --from=builder /app/bridgeosd .
+COPY --from=builder /app/hal-proxyd .
 
 # Create data directory
 RUN mkdir -p /app/data /app/artifacts
@@ -36,9 +36,9 @@ RUN mkdir -p /app/data /app/artifacts
 EXPOSE 8080
 
 # Set environment variables
-ENV BRIDGEOS_DB=/app/data/bridgeos.db
-ENV BRIDGEOS_ADDR=:8080
-ENV BRIDGEOS_ARTIFACTS=/app/artifacts
+ENV HAL_PROXY_DB=/app/data/hal-proxy.db
+ENV HAL_PROXY_ADDR=:8080
+ENV HAL_PROXY_ARTIFACTS=/app/artifacts
 
 # Run the binary
-CMD ["./bridgeosd"]
+CMD ["./hal-proxyd"]

@@ -53,7 +53,11 @@ func JWTAuth(config JWTConfig) Middleware {
 				return
 			}
 			if config.Issuer != "" {
-				issuer, _ := claims.GetIssuer()
+				issuer, err := claims.GetIssuer()
+				if err != nil {
+					http.Error(w, "invalid_claims", http.StatusUnauthorized)
+					return
+				}
 				if issuer != config.Issuer {
 					http.Error(w, "invalid_issuer", http.StatusUnauthorized)
 					return

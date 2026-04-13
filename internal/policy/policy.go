@@ -1,6 +1,6 @@
 package policy
 
-import "bridgeos/internal/domain"
+import "hal-proxy/internal/domain"
 
 // RiskConfig defines configuration for a risk class
 type RiskConfig struct {

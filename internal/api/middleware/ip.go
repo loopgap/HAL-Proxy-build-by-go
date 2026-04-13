@@ -3,13 +3,47 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"strings"
 )
 
-func getClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		for _, ip := range splitIPs(xff) {
-			if ip = trimIP(ip); ip != "" {
-				return ip
+// isTrustedProxy checks if the remote address is from a trusted proxy
+func isTrustedProxy(remoteAddr string, trustedProxies []string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+
+	// Check if the remote address is localhost or a trusted proxy
+	if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+		return true
+	}
+
+	for _, proxy := range trustedProxies {
+		if proxy == "*" || proxy == host {
+			return true
+		}
+		// Check if trusted proxy is a CIDR range
+		if strings.Contains(proxy, "/") {
+			_, ipnet, err := net.ParseCIDR(proxy)
+			if err == nil {
+				ip := net.ParseIP(host)
+				if ip != nil && ipnet.Contains(ip) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func getClientIP(r *http.Request, trustedProxies []string) string {
+	// Only trust X-Forwarded-For if request comes from a trusted proxy
+	if isTrustedProxy(r.RemoteAddr, trustedProxies) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			for _, ip := range splitIPs(xff) {
+				if ip = trimIP(ip); ip != "" {
+					return ip
+				}
 			}
 		}
 	}
@@ -39,11 +73,5 @@ func splitIPs(xff string) []string {
 }
 
 func trimIP(ip string) string {
-	for len(ip) > 0 && (ip[0] == ' ' || ip[0] == '\t') {
-		ip = ip[1:]
-	}
-	for len(ip) > 0 && (ip[len(ip)-1] == ' ' || ip[len(ip)-1] == '\t') {
-		ip = ip[:len(ip)-1]
-	}
-	return ip
+	return strings.TrimSpace(ip)
 }

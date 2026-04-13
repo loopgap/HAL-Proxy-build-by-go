@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 jobs:
   # Go Backend Tests
   go-test:
@@ -25,13 +30,13 @@ jobs:
       - name: Download dependencies
         run: go mod download
       
-      - name: Run Go tests
+      - name: Run Go tests with race detection
         run: go test -v -race -cover ./...
       
       - name: Build Go binaries
         run: |
           go build -o bin/bridge ./cmd/bridge
-          go build -o bin/bridgeosd ./cmd/bridgeosd
+          go build -o bin/hal-proxyd ./cmd/hal-proxyd
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -108,8 +113,8 @@ jobs:
           file: ./Dockerfile.backend
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
-            bridgeos/bridgeosd:${{ github.sha }}
-            bridgeos/bridgeosd:latest
+            hal-proxy/hal-proxyd:${{ github.sha }}
+            hal-proxy/hal-proxyd:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -1,13 +1,13 @@
 # ==========================================
-# BridgeOS .gitignore
+# HAL-Proxy .gitignore
 # ==========================================
 
 # === Go ===
 # Binaries
-bridge
-bridgeosd
-bridge.exe
-bridgeosd.exe
+hal
+hal-proxy
+hal.exe
+hal-proxy.exe
 *.exe
 bin/
 *.test
@@ -20,7 +20,7 @@ bin/
 
 # === Database ===
 # Local SQLite database
-bridgeos.db
+hal-proxy.db
 *.db
 
 # === Artifacts ===
@@ -93,3 +93,15 @@ secrets/
 build/
 dist/
 out/
+
+# === Sisyphus (Planning/Execution) ===
+.sisyphus/
+!/.sisyphus/.gitkeep
+
+# === Evidence / QA Results ===
+.sisyphus/evidence/
+*.evidence.*
+
+# === OpenTelemetry Exports ===
+*.otlp/
+otel-exporter.log

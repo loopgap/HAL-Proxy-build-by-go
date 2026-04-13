@@ -2,23 +2,8 @@ import { Link } from 'react-router-dom'
 import { Plus, Activity } from 'lucide-react'
 import { useCases } from '@/hooks/useApi'
 import { Table, type Column } from '@/components/ui/Table'
+import { StatusBadge } from '@/components/ui/StatusBadge'
 import type { CaseRecord } from '@/types'
-
-function StatusBadge({ status }: { status: string }) {
-  const styles = {
-    completed: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-    running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
-    paused: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
-    rejected: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
-    ready: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
-    draft: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
-  }
-  return (
-    <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${styles[status as keyof typeof styles] || styles.draft}`}>
-      {status}
-    </span>
-  )
-}
 
 export default function CaseList() {
   const { data: cases = [], isLoading, error } = useCases()

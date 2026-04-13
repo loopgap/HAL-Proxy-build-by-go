@@ -1,4 +1,4 @@
-// CaseRecord represents a BridgeOS case record
+// CaseRecord represents a HAL-Proxy case record
 export interface CaseRecord {
   id: string
   title: string

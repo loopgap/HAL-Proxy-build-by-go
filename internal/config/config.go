@@ -57,6 +57,7 @@ type AuthConfig struct {
 	JWTExpiryHours int               `json:"jwt_expiry_hours"`
 	JWTIssuer      string            `json:"jwt_issuer"`
 	APIKeys        map[string]string `json:"api_keys"`
+	TrustedProxies []string          `json:"trusted_proxies"`
 }
 
 // RateLimitConfig holds rate limiting configuration
@@ -70,7 +71,7 @@ type RateLimitConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Address:        getEnv("BRIDGEOS_ADDR", ":8080"),
+			Address:        getEnv("HAL_PROXY_ADDR", ":8080"),
 			ReadTimeout:    30,
 			WriteTimeout:   30,
 			IdleTimeout:    120,
@@ -78,26 +79,26 @@ func DefaultConfig() *Config {
 			RequestTimeout: 30,
 		},
 		Database: DatabaseConfig{
-			Path:         getEnv("BRIDGEOS_DB", "bridgeos.db"),
+			Path:         getEnv("HAL_PROXY_DB", "hal-proxy.db"),
 			MaxOpenConns: 25,
 			MaxIdleConns: 5,
 		},
 		App: AppConfig{
-			Name:         "BridgeOS",
+			Name:         "HAL-Proxy",
 			Version:      "1.0.0",
-			Environment:  getEnv("BRIDGEOS_ENV", "development"),
-			ArtifactsDir: getEnv("BRIDGEOS_ARTIFACTS", "artifacts"),
+			Environment:  getEnv("HAL_PROXY_ENV", "development"),
+			ArtifactsDir: getEnv("HAL_PROXY_ARTIFACTS", "artifacts"),
 		},
 		Log: LogConfig{
-			Level:  getEnv("BRIDGEOS_LOG_LEVEL", "info"),
+			Level:  getEnv("HAL_PROXY_LOG_LEVEL", "info"),
 			Format: "json",
 			Output: "stdout",
 		},
 		Auth: AuthConfig{
-			JWTSecret:      getEnv("BRIDGEOS_JWT_SECRET", ""),
+			JWTSecret:      getEnv("HAL_PROXY_JWT_SECRET", ""),
 			JWTExpiryHours: 24,
-			JWTIssuer:      getEnv("BRIDGEOS_JWT_ISSUER", "bridgeos"),
-			APIKeys:        parseAPIKeys(getEnv("BRIDGEOS_API_KEYS", "")),
+			JWTIssuer:      getEnv("HAL_PROXY_JWT_ISSUER", "hal-proxy"),
+			APIKeys:        parseAPIKeys(getEnv("HAL_PROXY_API_KEYS", "")),
 		},
 		RateLimit: RateLimitConfig{
 			Enabled:           true,
@@ -221,25 +222,56 @@ func parseConfigLine(config *Config, line string) {
 		config.Log.Output = value
 	case "log.file_path":
 		config.Log.FilePath = value
+	// Auth config
+	case "auth.jwt_secret":
+		config.Auth.JWTSecret = value
+	case "auth.jwt_expiry_hours":
+		if v, err := strconv.Atoi(value); err == nil {
+			config.Auth.JWTExpiryHours = v
+		}
+	case "auth.jwt_issuer":
+		config.Auth.JWTIssuer = value
+	// RateLimit config
+	case "rate_limit.enabled":
+		if v, err := strconv.ParseBool(value); err == nil {
+			config.RateLimit.Enabled = v
+		}
+	case "rate_limit.requests_per_minute":
+		if v, err := strconv.Atoi(value); err == nil {
+			config.RateLimit.RequestsPerMinute = v
+		}
+	case "rate_limit.burst_size":
+		if v, err := strconv.Atoi(value); err == nil {
+			config.RateLimit.BurstSize = v
+		}
 	}
 }
 
 // applyEnvOverrides applies environment variable overrides
 func (c *Config) applyEnvOverrides() {
-	if addr := os.Getenv("BRIDGEOS_ADDR"); addr != "" {
+	if addr := os.Getenv("HAL_PROXY_ADDR"); addr != "" {
 		c.Server.Address = addr
 	}
-	if db := os.Getenv("BRIDGEOS_DB"); db != "" {
+	if db := os.Getenv("HAL_PROXY_DB"); db != "" {
 		c.Database.Path = db
 	}
-	if artifacts := os.Getenv("BRIDGEOS_ARTIFACTS"); artifacts != "" {
+	if artifacts := os.Getenv("HAL_PROXY_ARTIFACTS"); artifacts != "" {
 		c.App.ArtifactsDir = artifacts
 	}
-	if env := os.Getenv("BRIDGEOS_ENV"); env != "" {
+	if env := os.Getenv("HAL_PROXY_ENV"); env != "" {
 		c.App.Environment = env
 	}
-	if logLevel := os.Getenv("BRIDGEOS_LOG_LEVEL"); logLevel != "" {
+	if logLevel := os.Getenv("HAL_PROXY_LOG_LEVEL"); logLevel != "" {
 		c.Log.Level = logLevel
+	}
+	if jwtSecret := os.Getenv("HAL_PROXY_JWT_SECRET"); jwtSecret != "" {
+		c.Auth.JWTSecret = jwtSecret
+	}
+	if jwtIssuer := os.Getenv("HAL_PROXY_JWT_ISSUER"); jwtIssuer != "" {
+		c.Auth.JWTIssuer = jwtIssuer
+	}
+	if apiKeys := os.Getenv("HAL_PROXY_API_KEYS"); apiKeys != "" {
+		c.Auth.APIKeys = parseAPIKeys(apiKeys)
 	}
 }
 
@@ -259,6 +291,14 @@ func (c *Config) Validate() error {
 
 	if c.Server.RequestTimeout <= 0 {
 		return fmt.Errorf("request timeout must be positive")
+	}
+
+	// JWT secret validation - security critical
+	if c.Auth.JWTSecret == "" {
+		return fmt.Errorf("jwt_secret is required")
+	}
+	if len(c.Auth.JWTSecret) < 32 {
+		return fmt.Errorf("jwt_secret must be at least 32 characters long")
 	}
 
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
@@ -298,16 +338,6 @@ func (c *ServerConfig) GetRequestTimeout() time.Duration {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
-	}
-	return defaultValue
-}
-
-// getEnvInt gets an environment variable as int or returns a default value
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
 	}
 	return defaultValue
 }

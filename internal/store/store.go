@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"bridgeos/internal/domain"
+	"hal-proxy/internal/domain"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -14,7 +14,9 @@ type Repository interface {
 	CreateCase(context.Context, domain.CaseRecord) error
 	UpdateCase(context.Context, domain.CaseRecord) error
 	GetCase(context.Context, string) (domain.CaseRecord, error)
+	GetCaseWithRelations(context.Context, string) (domain.CaseWithRelations, error)
 	ListCases(context.Context) ([]domain.CaseRecord, error)
+	ListCasesPaginated(ctx context.Context, cursor string, limit int) ([]domain.CaseRecord, string, bool, error)
 	AppendEvent(context.Context, domain.EventEnvelope) (domain.EventEnvelope, error)
 	ListEvents(context.Context, string) ([]domain.EventEnvelope, error)
 	CreateOrGetPendingApproval(context.Context, domain.Approval) (domain.Approval, error)

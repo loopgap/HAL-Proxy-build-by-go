@@ -61,7 +61,7 @@ export default function Layout({ children }: LayoutProps) {
               <Menu className="w-6 h-6" />
             </button>
             <h1 className="text-xl font-bold flex items-center gap-2">
-              BridgeOS
+              HAL-Proxy
             </h1>
           </div>
         </div>
@@ -104,7 +104,7 @@ export default function Layout({ children }: LayoutProps) {
             Logout
           </button>
           <div className='text-xs text-gray-500 px-4 pt-2 border-t border-gray-700'>
-            BridgeOS v1.0.0
+            HAL-Proxy v1.0.0
           </div>
         </div>
       </aside>

@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"time"
 
-	"bridgeos/internal/domain"
+	"hal-proxy/internal/domain"
 
 	_ "modernc.org/sqlite"
 )
+
+const timestampFormat = time.RFC3339Nano
 
 type SQLiteRepository struct {
 	db *sql.DB
@@ -23,11 +25,30 @@ func NewSQLiteRepository(path string) (*SQLiteRepository, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA cache_size=-64000",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA foreign_keys=ON",
+	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("apply pragma: %w", err)
+		}
+	}
+
 	return &SQLiteRepository{db: db}, nil
 }
 
 func (r *SQLiteRepository) Close() error {
 	return r.db.Close()
+}
+
+// DB returns the underlying database connection for configuration purposes
+func (r *SQLiteRepository) DB() *sql.DB {
+	return r.db
 }
 
 func (r *SQLiteRepository) Init(ctx context.Context) error {
@@ -74,6 +95,9 @@ func (r *SQLiteRepository) Init(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_approvals_case_command ON approvals(case_id, command_index);`,
 		`CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_reports_case_id ON reports(case_id);`,
+		// Additional indexes for Wave 2 optimizations
+		`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);`,
+		`CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);`,
 	}
 
 	for _, stmt := range stmts {
@@ -95,7 +119,7 @@ func (r *SQLiteRepository) CreateCase(ctx context.Context, c domain.CaseRecord) 
 		ctx,
 		`INSERT INTO cases (id, title, status, spec_json, next_command, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		c.ID, c.Title, c.Status, string(spec), c.NextCommand, c.CreatedAt.Format(time.RFC3339Nano), c.UpdatedAt.Format(time.RFC3339Nano),
+		c.ID, c.Title, c.Status, string(spec), c.NextCommand, c.CreatedAt.Format(timestampFormat), c.UpdatedAt.Format(timestampFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("insert case: %w", err)
@@ -115,12 +139,15 @@ func (r *SQLiteRepository) UpdateCase(ctx context.Context, c domain.CaseRecord) 
 		`UPDATE cases
 		 SET title = ?, status = ?, spec_json = ?, next_command = ?, updated_at = ?
 		 WHERE id = ?`,
-		c.Title, c.Status, string(spec), c.NextCommand, c.UpdatedAt.Format(time.RFC3339Nano), c.ID,
+		c.Title, c.Status, string(spec), c.NextCommand, c.UpdatedAt.Format(timestampFormat), c.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update case: %w", err)
 	}
-	rows, _ := res.RowsAffected()
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
 	if rows == 0 {
 		return ErrNotFound
 	}
@@ -131,6 +158,29 @@ func (r *SQLiteRepository) UpdateCase(ctx context.Context, c domain.CaseRecord) 
 func (r *SQLiteRepository) GetCase(ctx context.Context, id string) (domain.CaseRecord, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT id, title, status, spec_json, next_command, created_at, updated_at FROM cases WHERE id = ?`, id)
 	return scanCase(row)
+}
+
+func (r *SQLiteRepository) GetCaseWithRelations(ctx context.Context, id string) (domain.CaseWithRelations, error) {
+	c, err := r.GetCase(ctx, id)
+	if err != nil {
+		return domain.CaseWithRelations{}, err
+	}
+
+	events, err := r.ListEvents(ctx, id)
+	if err != nil {
+		return domain.CaseWithRelations{}, fmt.Errorf("list events: %w", err)
+	}
+
+	approvals, err := r.ListApprovals(ctx, id)
+	if err != nil {
+		return domain.CaseWithRelations{}, fmt.Errorf("list approvals: %w", err)
+	}
+
+	return domain.CaseWithRelations{
+		Case:      c,
+		Events:    events,
+		Approvals: approvals,
+	}, nil
 }
 
 func (r *SQLiteRepository) ListCases(ctx context.Context) ([]domain.CaseRecord, error) {
@@ -152,11 +202,56 @@ func (r *SQLiteRepository) ListCases(ctx context.Context) ([]domain.CaseRecord, 
 	return out, rows.Err()
 }
 
+func (r *SQLiteRepository) ListCasesPaginated(ctx context.Context, cursor string, limit int) ([]domain.CaseRecord, string, bool, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	query := `SELECT id, title, status, spec_json, next_command, created_at, updated_at FROM cases ORDER BY created_at DESC LIMIT ?`
+	args := []any{limit + 1} // Request one extra to check hasMore
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", false, err
+	}
+	defer rows.Close()
+
+	var cases []domain.CaseRecord
+	for rows.Next() {
+		var c domain.CaseRecord
+		var specJSON string
+		err := rows.Scan(&c.ID, &c.Title, &c.Status, &specJSON, &c.NextCommand, &c.CreatedAt, &c.UpdatedAt)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if err := json.Unmarshal([]byte(specJSON), &c.Spec); err != nil {
+			return nil, "", false, err
+		}
+		cases = append(cases, c)
+	}
+
+	hasMore := len(cases) > limit
+	if hasMore {
+		cases = cases[:limit]
+	}
+
+	var nextCursor string
+	if hasMore && len(cases) > 0 {
+		lastCase := cases[len(cases)-1]
+		nextCursor = lastCase.CreatedAt.Format(time.RFC3339Nano)
+	}
+
+	return cases, nextCursor, hasMore, nil
+}
+
 func (r *SQLiteRepository) AppendEvent(ctx context.Context, e domain.EventEnvelope) (domain.EventEnvelope, error) {
 	res, err := r.db.ExecContext(
 		ctx,
 		`INSERT INTO events (case_id, type, payload_json, created_at) VALUES (?, ?, ?, ?)`,
-		e.CaseID, e.Type, string(e.Payload), e.CreatedAt.Format(time.RFC3339Nano),
+		e.CaseID, e.Type, string(e.Payload), e.CreatedAt.Format(timestampFormat),
 	)
 	if err != nil {
 		return domain.EventEnvelope{}, fmt.Errorf("append event: %w", err)
@@ -206,7 +301,7 @@ func (r *SQLiteRepository) CreateOrGetPendingApproval(ctx context.Context, a dom
 		ctx,
 		`INSERT INTO approvals (id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.CaseID, a.CommandIndex, a.CommandName, a.RiskClass, a.Status, a.Reason, a.DecidedBy, nullableTime(a.DecidedAt), a.CreatedAt.Format(time.RFC3339Nano),
+		a.ID, a.CaseID, a.CommandIndex, a.CommandName, a.RiskClass, a.Status, a.Reason, a.DecidedBy, nullableTime(a.DecidedAt), a.CreatedAt.Format(timestampFormat),
 	)
 	if err != nil {
 		return domain.Approval{}, fmt.Errorf("insert approval: %w", err)
@@ -270,7 +365,7 @@ func (r *SQLiteRepository) CreateReport(ctx context.Context, rep domain.ReportSu
 		ctx,
 		`INSERT INTO reports (id, case_id, path, command_count, event_count, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		rep.ID, rep.CaseID, rep.Path, rep.CommandCount, rep.EventCount, rep.CreatedAt.Format(time.RFC3339Nano),
+		rep.ID, rep.CaseID, rep.Path, rep.CommandCount, rep.EventCount, rep.CreatedAt.Format(timestampFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("insert report: %w", err)
@@ -288,7 +383,11 @@ func (r *SQLiteRepository) GetLatestReport(ctx context.Context, caseID string) (
 		}
 		return domain.ReportSummary{}, fmt.Errorf("scan report: %w", err)
 	}
-	rep.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	var err error
+	rep.CreatedAt, err = time.Parse(timestampFormat, createdAt)
+	if err != nil {
+		return domain.ReportSummary{}, fmt.Errorf("parse created_at: %w", err)
+	}
 	return rep, nil
 }
 
@@ -312,8 +411,15 @@ func scanCase(s scanner) (domain.CaseRecord, error) {
 	if err := json.Unmarshal([]byte(specJSON), &c.Spec); err != nil {
 		return domain.CaseRecord{}, fmt.Errorf("unmarshal case spec: %w", err)
 	}
-	c.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	c.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	var err error
+	c.CreatedAt, err = time.Parse(timestampFormat, createdAt)
+	if err != nil {
+		return domain.CaseRecord{}, fmt.Errorf("parse created_at: %w", err)
+	}
+	c.UpdatedAt, err = time.Parse(timestampFormat, updatedAt)
+	if err != nil {
+		return domain.CaseRecord{}, fmt.Errorf("parse updated_at: %w", err)
+	}
 	return c, nil
 }
 
@@ -325,7 +431,7 @@ func scanEvent(s scanner) (domain.EventEnvelope, error) {
 		return domain.EventEnvelope{}, fmt.Errorf("scan event: %w", err)
 	}
 	e.Payload = json.RawMessage(payloadJSON)
-	e.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	e.CreatedAt, _ = time.Parse(timestampFormat, createdAt)
 	return e, nil
 }
 
@@ -344,12 +450,12 @@ func scanApproval(s scanner) (domain.Approval, error) {
 	a.RiskClass = domain.RiskClass(risk)
 	a.Status = domain.ApprovalStatus(status)
 	if decidedAt.Valid {
-		parsed, err := time.Parse(time.RFC3339Nano, decidedAt.String)
+		parsed, err := time.Parse(timestampFormat, decidedAt.String)
 		if err == nil {
 			a.DecidedAt = &parsed
 		}
 	}
-	a.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	a.CreatedAt, _ = time.Parse(timestampFormat, createdAt)
 	return a, nil
 }
 
@@ -357,5 +463,5 @@ func nullableTime(t *time.Time) any {
 	if t == nil {
 		return nil
 	}
-	return t.Format(time.RFC3339Nano)
+	return t.Format(timestampFormat)
 }

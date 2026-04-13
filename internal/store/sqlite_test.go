@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"bridgeos/internal/domain"
+	"hal-proxy/internal/domain"
 )
 
 func setupTestDB(t *testing.T) (*SQLiteRepository, func()) {
@@ -208,7 +208,7 @@ func TestListCases(t *testing.T) {
 		caseRecord := domain.CaseRecord{
 			ID:          "test-case-list-" + string(rune('a'+i)),
 			Title:       "Test Case",
-			Status:       domain.CaseStatusReady,
+			Status:      domain.CaseStatusReady,
 			Spec:        domain.CaseSpec{},
 			NextCommand: 0,
 			CreatedAt:   now,

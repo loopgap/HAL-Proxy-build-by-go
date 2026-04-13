@@ -19,10 +19,10 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestConfig_EnvOverrides(t *testing.T) {
-	os.Setenv("BRIDGEOS_ADDR", ":9090")
-	os.Setenv("BRIDGEOS_DB", "custom.db")
-	defer os.Unsetenv("BRIDGEOS_ADDR")
-	defer os.Unsetenv("BRIDGEOS_DB")
+	os.Setenv("HAL_PROXY_ADDR", ":9090")
+	os.Setenv("HAL_PROXY_DB", "custom.db")
+	defer os.Unsetenv("HAL_PROXY_ADDR")
+	defer os.Unsetenv("HAL_PROXY_DB")
 	cfg := DefaultConfig()
 	if cfg.Server.Address != ":9090" {
 		t.Errorf("Expected :9090, got %s", cfg.Server.Address)
@@ -34,9 +34,10 @@ func TestConfig_EnvOverrides(t *testing.T) {
 
 func TestConfig_Validate(t *testing.T) {
 	cfg := &Config{
-		Server: ServerConfig{Address: ":8080", MaxBodySize: 1 << 20, RequestTimeout: 30},
+		Server:   ServerConfig{Address: ":8080", MaxBodySize: 1 << 20, RequestTimeout: 30},
 		Database: DatabaseConfig{Path: "test.db"},
-		Log: LogConfig{Level: "info", Format: "json"},
+		Log:      LogConfig{Level: "info", Format: "json"},
+		Auth:     AuthConfig{JWTSecret: "this-is-a-valid-secret-key-for-testing-purposes-only-32chars"},
 	}
 	err := cfg.Validate()
 	if err != nil {
@@ -46,9 +47,10 @@ func TestConfig_Validate(t *testing.T) {
 
 func TestConfig_ValidateInvalidAddress(t *testing.T) {
 	cfg := &Config{
-		Server: ServerConfig{Address: "", MaxBodySize: 1 << 20, RequestTimeout: 30},
+		Server:   ServerConfig{Address: "", MaxBodySize: 1 << 20, RequestTimeout: 30},
 		Database: DatabaseConfig{Path: "test.db"},
-		Log: LogConfig{Level: "info", Format: "json"},
+		Log:      LogConfig{Level: "info", Format: "json"},
+		Auth:     AuthConfig{JWTSecret: "this-is-a-valid-secret-key-for-testing-purposes-only-32chars"},
 	}
 	err := cfg.Validate()
 	if err == nil {
@@ -58,9 +60,10 @@ func TestConfig_ValidateInvalidAddress(t *testing.T) {
 
 func TestConfig_ValidateInvalidLogLevel(t *testing.T) {
 	cfg := &Config{
-		Server: ServerConfig{Address: ":8080", MaxBodySize: 1 << 20, RequestTimeout: 30},
+		Server:   ServerConfig{Address: ":8080", MaxBodySize: 1 << 20, RequestTimeout: 30},
 		Database: DatabaseConfig{Path: "test.db"},
-		Log: LogConfig{Level: "invalid", Format: "json"},
+		Log:      LogConfig{Level: "invalid", Format: "json"},
+		Auth:     AuthConfig{JWTSecret: "this-is-a-valid-secret-key-for-testing-purposes-only-32chars"},
 	}
 	err := cfg.Validate()
 	if err == nil {
@@ -75,7 +78,7 @@ func TestServerConfig_GetTimeouts(t *testing.T) {
 		IdleTimeout:    30,
 		RequestTimeout: 40,
 	}
-	
+
 	if cfg.GetReadTimeout() != 10*1e9 {
 		t.Errorf("Expected 10s, got %v", cfg.GetReadTimeout())
 	}

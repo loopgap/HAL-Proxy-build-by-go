@@ -141,3 +141,10 @@ type SessionRecord struct {
 	Owner     string    `json:"owner"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// CaseWithRelations holds a case with its associated events and approvals
+type CaseWithRelations struct {
+	Case      CaseRecord      `json:"case"`
+	Events    []EventEnvelope `json:"events"`
+	Approvals []Approval      `json:"approvals"`
+}

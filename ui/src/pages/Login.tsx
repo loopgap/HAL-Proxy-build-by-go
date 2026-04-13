@@ -45,7 +45,7 @@ export default function Login() {
   return (
     <div className='min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4'>
       <Card className='w-full max-w-md'>
-        <CardHeader title='BridgeOS' subtitle='Enter your credentials to access the system' />
+        <CardHeader title='HAL-Proxy' subtitle='Enter your credentials to access the system' />
         <CardContent>
           <form onSubmit={handleSubmit} className='space-y-4'>
             {error && (

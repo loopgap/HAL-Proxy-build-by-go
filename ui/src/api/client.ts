@@ -73,12 +73,7 @@ function handleError(error: unknown): ApiResponse<never> {
   return { data: null, error: 'An unexpected error occurred' }
 }
 
-export function createCancellableRequest<T>(request: (signal: AbortSignal) => Promise<ApiResponse<T>>): { request: Promise<ApiResponse<T>>; cancel: () => void } {
-  const controller = new AbortController()
-  let cancelled = false
-  const promise = request(controller.signal).finally(() => { cancelled = true })
-  return { request: promise, cancel: () => { if (!cancelled) controller.abort() } }
-}// Case APIs
+// Case APIs
 export async function getCases(): Promise<ApiResponse<CaseRecord[]>> {
   try { const response = await api.get('/cases'); return handleResponse<CaseRecord[]>(response) }
   catch (error) { return handleError(error) }
@@ -121,13 +116,14 @@ export async function rejectApproval(id: string): Promise<ApiResponse<Approval>>
 }
 
 // Report APIs
-const REPORTS_STORAGE_KEY = 'bridgeos_reports'
+const REPORTS_STORAGE_KEY = 'hal_proxy_reports'
 
 function getStoredReports(): ReportSummary[] {
   try {
     const stored = localStorage.getItem(REPORTS_STORAGE_KEY)
     return stored ? JSON.parse(stored) : []
-  } catch {
+  } catch (error) {
+    console.warn("Failed to get stored reports:", error)
     return []
   }
 }
@@ -142,8 +138,8 @@ function saveReport(report: ReportSummary): void {
       reports.unshift(report)
     }
     localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports))
-  } catch {
-    // localStorage unavailable
+  } catch (error) {
+    console.warn("Failed to save report to localStorage:", error)
   }
 }
 

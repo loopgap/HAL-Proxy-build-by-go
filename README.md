@@ -1,7 +1,7 @@
-# BridgeOS
+# HAL-Proxy
 
 <p align="center">
-  <img src="docs/architecture-diagram.png" alt="BridgeOS Architecture" width="600">
+  <img src="docs/architecture-diagram.png" alt="HAL-Proxy Architecture" width="600">
 </p>
 
 <p align="center">
@@ -9,14 +9,18 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/your-org/bridgeos/actions">
-    <img src="https://github.com/your-org/bridgeos/workflows/CI/CD Pipeline/badge.svg" alt="CI">
+  [![CI/CD Pipeline](https://github.com/loopgap/HAL-Proxy-build-by-go/actions/workflows/ci.yml/badge.svg)](https://github.com/loopgap/HAL-Proxy-build-by-go/actions/workflows/ci.yml)
+  [![OpenSSF Scorecard](https://github.com/loopgap/HAL-Proxy-build-by-go/actions/workflows/scorecards.yml/badge.svg)](https://github.com/loopgap/HAL-Proxy-build-by-go/actions/workflows/scorecards.yml)
+  [![Dependency Review](https://github.com/loopgap/HAL-Proxy-build-by-go/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/loopgap/HAL-Proxy-build-by-go/actions/workflows/dependency-review.yml)
+  [![Secret Detection](https://github.com/loopgap/HAL-Proxy-build-by-go/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/loopgap/HAL-Proxy-build-by-go/actions/workflows/gitleaks.yml)
+  <a href="https://goreportcard.com/report/github.com/your-org/hal-proxy">
+    <img src="https://goreportcard.com/badge/github.com/your-org/hal-proxy" alt="Go Report Card">
   </a>
-  <a href="https://goreportcard.com/report/github.com/your-org/bridgeos">
-    <img src="https://goreportcard.com/badge/github.com/your-org/bridgeos" alt="Go Report Card">
+  <a href="https://goreportcard.com/report/github.com/your-org/hal-proxy">
+    <img src="https://goreportcard.com/badge/github.com/your-org/hal-proxy" alt="Go Report Card">
   </a>
-  <a href="https://pkg.go.dev/github.com/your-org/bridgeos">
-    <img src="https://pkg.go.dev/badge/github.com/your-org/bridgeos" alt="GoDoc">
+  <a href="https://pkg.go.dev/github.com/your-org/hal-proxy">
+    <img src="https://pkg.go.dev/badge/github.com/your-org/hal-proxy" alt="GoDoc">
   </a>
 </p>
 
@@ -51,7 +55,7 @@
 | 生成报告 | `bridge report build` | 生成执行报告 |
 | 列出设备 | `bridge device ls` | 列出可用设备 |
 | 列出会话 | `bridge session ls` | 列出活跃会话 |
-| HTTP 服务 | `bridgeosd` | 本地 REST API 守护进程 |
+| HTTP 服务 | `hal-proxyd` | 本地 REST API 守护进程 |
 
 ### 安全特性
 
@@ -85,8 +89,8 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-org/bridgeos.git
-cd bridgeos
+git clone https://github.com/your-org/hal-proxy.git
+cd hal-proxy
 
 # 下载依赖
 go mod download
@@ -99,7 +103,7 @@ cd ui && npm install && cd ..
 
 ```bash
 # 启动后端服务
-make run-bridgeosd
+make run-hal-proxyd
 
 # 新终端 - 创建案例
 go run ./cmd/bridge case new --spec ./testdata/demo-case.json
@@ -139,9 +143,9 @@ make docker-stop
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        BridgeOS                              │
+│                        HAL-Proxy                              │
 ├─────────────────────────────────────────────────────────────┤
-│  CLI (bridge)  │  HTTP API (bridgeosd)  │  UI (Web)       │
+│  CLI (bridge)  │  HTTP API (hal-proxyd)  │  UI (Web)       │
 ├─────────────────────────────────────────────────────────────┤
 │                      Core Service Layer                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐      │
@@ -247,10 +251,10 @@ POST /v1/reports/{case_id}/build
 ### 项目结构
 
 ```
-bridgeos/
+hal-proxy/
 ├── cmd/                    # 命令行入口
 │   ├── bridge/             # CLI 客户端
-│   └── bridgeosd/          # HTTP 服务
+│   └── hal-proxyd/          # HTTP 服务
 ├── internal/               # 内部包
 │   ├── api/               # HTTP API
 │   │   └── middleware/    # 中间件
@@ -277,7 +281,7 @@ make build
 make build-bridge
 
 # 构建守护进程
-make build-bridgeosd
+make build-hal-proxyd
 
 # Docker 构建
 make docker-build
@@ -333,21 +337,21 @@ docker-compose -f docker-compose.prod.yml up -d
 kubectl apply -f k8s/
 
 # 查看 pod
-kubectl get pods -l app=bridgeosd
+kubectl get pods -l app=hal-proxyd
 
 # 查看日志
-kubectl logs -l app=bridgeosd
+kubectl logs -l app=hal-proxyd
 ```
 
 ### 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `BRIDGEOS_DB` | `bridgeos.db` | SQLite 数据库路径 |
-| `BRIDGEOS_ADDR` | `:8080` | HTTP API 监听地址 |
-| `BRIDGEOS_ARTIFACTS` | `artifacts/` | 报告输出目录 |
-| `BRIDGEOS_ENV` | `development` | 运行环境 |
-| `BRIDGEOS_LOG_LEVEL` | `info` | 日志级别 |
+| `HAL-PROXY_DB` | `hal-proxy.db` | SQLite 数据库路径 |
+| `HAL-PROXY_ADDR` | `:8080` | HTTP API 监听地址 |
+| `HAL-PROXY_ARTIFACTS` | `artifacts/` | 报告输出目录 |
+| `HAL-PROXY_ENV` | `development` | 运行环境 |
+| `HAL-PROXY_LOG_LEVEL` | `info` | 日志级别 |
 
 ---
 
@@ -359,12 +363,12 @@ kubectl logs -l app=bridgeosd
 
 **关键指标**:
 
-- `bridgeos_http_requests_total` - HTTP 请求总数
-- `bridgeos_http_request_duration_seconds` - 请求延迟
-- `bridgeos_cases_created_total` - 创建的案例数
-- `bridgeos_cases_running` - 运行中的案例数
-- `bridgeos_approvals_requested_total` - 请求的审批数
-- `bridgeos_commands_executed_total` - 执行的命令数
+- `hal-proxy_http_requests_total` - HTTP 请求总数
+- `hal-proxy_http_request_duration_seconds` - 请求延迟
+- `hal-proxy_cases_created_total` - 创建的案例数
+- `hal-proxy_cases_running` - 运行中的案例数
+- `hal-proxy_approvals_requested_total` - 请求的审批数
+- `hal-proxy_commands_executed_total` - 执行的命令数
 
 ### 健康检查
 

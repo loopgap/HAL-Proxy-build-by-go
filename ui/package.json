@@ -1,5 +1,5 @@
 {
-  "name": "bridgeos-ui",
+  "name": "hal-proxy-ui",
   "version": "1.0.0",
   "type": "module",
   "scripts": {

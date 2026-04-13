@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"bridgeos/internal/domain"
-	"bridgeos/internal/store"
+	"hal-proxy/internal/domain"
+	"hal-proxy/internal/store"
 )
 
 func TestCaseRunApprovalAndReportFlow(t *testing.T) {

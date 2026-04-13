@@ -82,10 +82,10 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	return true
 }
 
-func RateLimit(limiter *RateLimiter) Middleware {
+func RateLimit(limiter *RateLimiter, trustedProxies []string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := getClientIP(r)
+			ip := getClientIP(r, trustedProxies)
 			if !limiter.Allow(ip) {
 				http.Error(w, "rate_limit_exceeded", http.StatusTooManyRequests)
 				return
