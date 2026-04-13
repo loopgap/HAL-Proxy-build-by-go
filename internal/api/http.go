@@ -29,15 +29,15 @@ const RequestTimeout = 30 * 1e9 // 30 seconds in nanoseconds
 
 // Server handles HTTP API requests with security best practices
 type Server struct {
-	svc *core.Service
-	db  *sql.DB
-	// In production, this should be populated with actual authentication middleware
+	svc            *core.Service
+	db             *sql.DB
+	blacklist      *store.TokenBlacklist
 	authMiddleware func(http.Handler) http.Handler
 	trustedProxies []string
 }
 
 // NewServer creates a new API server instance
-func NewServer(svc *core.Service, db *sql.DB, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string) *Server {
+func NewServer(svc *core.Service, db *sql.DB, blacklist *store.TokenBlacklist, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string) *Server {
 	jwtConfig := middleware.JWTConfig{
 		Secret:          jwtSecret,
 		ExpirationHours: jwtExpiryHours,
@@ -45,15 +45,20 @@ func NewServer(svc *core.Service, db *sql.DB, jwtSecret string, jwtExpiryHours i
 	}
 
 	var authMW func(http.Handler) http.Handler
-	if jwtConfig.Secret != "" {
-		authMW = middleware.JWTAuth(jwtConfig)
-	} else {
-		authMW = func(next http.Handler) http.Handler { return next }
+	if jwtConfig.Secret == "" {
+		log.Fatal("FATAL: JWT secret is required. Set HAL_PROXY_JWT_SECRET environment variable.")
 	}
+
+	jwtAuth := middleware.NewJWTAuthenticator(jwtConfig)
+	if blacklist != nil {
+		jwtAuth.Blacklist = blacklist
+	}
+	authMW = jwtAuth.Middleware()
 
 	return &Server{
 		svc:            svc,
 		db:             db,
+		blacklist:      blacklist,
 		authMiddleware: authMW,
 		trustedProxies: trustedProxies,
 	}
@@ -95,6 +100,8 @@ func normalizePath(path string) string {
 		return "/v1/sessions"
 	case path == "/v1/devices":
 		return "/v1/devices"
+	case path == "/v1/auth/revoke":
+		return "/v1/auth/revoke"
 	default:
 		return path
 	}
@@ -234,6 +241,10 @@ func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/devices":
 		s.handleListDevices(w, r)
 
+	// Token revocation
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/auth/revoke":
+		s.handleRevokeToken(w, r)
+
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 	}
@@ -293,7 +304,8 @@ func (s *Server) handleCreateCase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := s.svc.CreateCase(r.Context(), spec)
+	userID := middleware.GetUserIDFromContext(r.Context())
+	c, err := s.svc.CreateCase(r.Context(), spec, userID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -311,7 +323,8 @@ func (s *Server) handleListCases(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cases, nextCursor, hasMore, err := s.svc.ListCasesPaginated(r.Context(), cursor, limit)
+	userID := middleware.GetUserIDFromContext(r.Context())
+	cases, nextCursor, hasMore, err := s.svc.ListCasesPaginated(r.Context(), cursor, limit, userID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -342,7 +355,8 @@ func (s *Server) handleGetCase(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
-	c, err := s.svc.GetCase(r.Context(), id)
+	userID := middleware.GetUserIDFromContext(r.Context())
+	c, err := s.svc.GetCase(r.Context(), id, userID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -356,12 +370,22 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
-	events, err := s.svc.ListEvents(r.Context(), id)
+
+	// Parse pagination params
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+	events, total, err := s.svc.ListEventsPaginated(r.Context(), id, limit, offset)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, events)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":  events,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 func (s *Server) handleRunCase(w http.ResponseWriter, r *http.Request) {
@@ -394,6 +418,25 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request, d
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_approval_id"})
 		return
 	}
+
+	// Check if user has permission to approve/reject
+	// Only admin or users with "approver" role can resolve approvals
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error":   "unauthorized",
+			"message": "Missing authentication",
+		})
+		return
+	}
+	if !middleware.HasRole(claims, "admin") && !middleware.HasRole(claims, "approver") {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":   "forbidden",
+			"message": "Only admins or approvers can resolve approvals",
+		})
+		return
+	}
+
 	userID := middleware.GetUserIDFromContext(r.Context())
 	approval, err := s.svc.ResolveApproval(r.Context(), id, userID, decision, "")
 	if err != nil {
@@ -433,6 +476,27 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, devices)
+}
+
+// handleRevokeToken revokes the current user's token
+func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
+
+	if s.blacklist == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "blacklist_not_configured"})
+		return
+	}
+
+	if err := s.blacklist.Add(r.Context(), claims.ID, claims.ExpiresAt.Time); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "revoked"})
 }
 
 // FIX 2: Proper error handling - don't expose internal error details

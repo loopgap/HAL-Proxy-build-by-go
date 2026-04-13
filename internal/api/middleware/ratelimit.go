@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const maxEntriesPerIP = 10000
+
 type RateLimiter struct {
 	requests map[string][]time.Time
 	mu       sync.RWMutex
@@ -35,10 +37,11 @@ func (rl *RateLimiter) cleanup() {
 		case <-ticker.C:
 			rl.mu.Lock()
 			now := time.Now()
+			cutoff := now.Add(-rl.window)
 			for key, times := range rl.requests {
-				var valid []time.Time
+				valid := make([]time.Time, 0, len(times))
 				for _, t := range times {
-					if now.Sub(t) < rl.window {
+					if t.After(cutoff) {
 						valid = append(valid, t)
 					}
 				}
@@ -74,6 +77,10 @@ func (rl *RateLimiter) Allow(ip string) bool {
 
 	if len(valid) >= rl.limit {
 		rl.requests[ip] = valid
+		return false
+	}
+
+	if len(rl.requests[ip]) >= maxEntriesPerIP {
 		return false
 	}
 

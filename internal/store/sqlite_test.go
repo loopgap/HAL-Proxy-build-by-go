@@ -136,6 +136,7 @@ func TestUpdateCase(t *testing.T) {
 	caseRecord.Status = domain.CaseStatusRunning
 	caseRecord.NextCommand = 5
 	caseRecord.UpdatedAt = time.Now().UTC()
+	caseRecord.Version++
 
 	err = repo.UpdateCase(ctx, caseRecord)
 	if err != nil {

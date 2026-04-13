@@ -16,7 +16,8 @@ import (
 const timestampFormat = time.RFC3339Nano
 
 type SQLiteRepository struct {
-	db *sql.DB
+	db        *sql.DB
+	Blacklist *TokenBlacklist
 }
 
 func NewSQLiteRepository(path string) (*SQLiteRepository, error) {
@@ -39,7 +40,9 @@ func NewSQLiteRepository(path string) (*SQLiteRepository, error) {
 		}
 	}
 
-	return &SQLiteRepository{db: db}, nil
+	blacklist := NewTokenBlacklist(db)
+
+	return &SQLiteRepository{db: db, Blacklist: blacklist}, nil
 }
 
 func (r *SQLiteRepository) Close() error {
@@ -52,16 +55,38 @@ func (r *SQLiteRepository) DB() *sql.DB {
 }
 
 func (r *SQLiteRepository) Init(ctx context.Context) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS cases (
+	// Initialize token blacklist
+	if err := r.Blacklist.Init(ctx); err != nil {
+		return fmt.Errorf("init token blacklist: %w", err)
+	}
+
+	// Create cases table with owner_id and version columns
+	if _, err := r.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS cases (
 			id TEXT PRIMARY KEY,
+			owner_id TEXT NOT NULL DEFAULT '',
 			title TEXT NOT NULL,
 			status TEXT NOT NULL,
 			spec_json TEXT NOT NULL,
 			next_command INTEGER NOT NULL,
+			version INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
-		);`,
+		)`); err != nil {
+		return fmt.Errorf("init cases table: %w", err)
+	}
+
+	// Migration: add version column if upgrading from older schema (pre-version field)
+	if err := r.migrateAddVersionColumn(ctx); err != nil {
+		return fmt.Errorf("migration add version: %w", err)
+	}
+
+	// Migration: add owner_id column if upgrading from older schema (pre-owner_id field)
+	if err := r.migrateAddOwnerIDColumn(ctx); err != nil {
+		return fmt.Errorf("migration add owner_id: %w", err)
+	}
+
+	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS events (
 			sequence INTEGER PRIMARY KEY AUTOINCREMENT,
 			case_id TEXT NOT NULL,
@@ -92,7 +117,7 @@ func (r *SQLiteRepository) Init(ctx context.Context) error {
 		// Performance indexes for faster queries
 		`CREATE INDEX IF NOT EXISTS idx_events_case_id ON events(case_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_approvals_case_id ON approvals(case_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_approvals_case_command ON approvals(case_id, command_index);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_case_command ON approvals(case_id, command_index);`,
 		`CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_reports_case_id ON reports(case_id);`,
 		// Additional indexes for Wave 2 optimizations
@@ -109,6 +134,76 @@ func (r *SQLiteRepository) Init(ctx context.Context) error {
 	return nil
 }
 
+// migrateAddVersionColumn adds the version column to cases table if it doesn't exist
+func (r *SQLiteRepository) migrateAddVersionColumn(ctx context.Context) error {
+	// Check if version column already exists
+	rows, err := r.db.QueryContext(ctx, `PRAGMA table_info(cases)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasVersion := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dflt_value interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk); err != nil {
+			return err
+		}
+		if name == "version" {
+			hasVersion = true
+			break
+		}
+	}
+
+	if !hasVersion {
+		_, err = r.db.ExecContext(ctx, `ALTER TABLE cases ADD COLUMN version INTEGER NOT NULL DEFAULT 0`)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateAddOwnerIDColumn adds the owner_id column to cases table if it doesn't exist
+func (r *SQLiteRepository) migrateAddOwnerIDColumn(ctx context.Context) error {
+	// Check if owner_id column already exists
+	rows, err := r.db.QueryContext(ctx, `PRAGMA table_info(cases)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasOwnerID := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dflt_value interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk); err != nil {
+			return err
+		}
+		if name == "owner_id" {
+			hasOwnerID = true
+			break
+		}
+	}
+
+	if !hasOwnerID {
+		_, err = r.db.ExecContext(ctx, `ALTER TABLE cases ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''`)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *SQLiteRepository) CreateCase(ctx context.Context, c domain.CaseRecord) error {
 	spec, err := json.Marshal(c.Spec)
 	if err != nil {
@@ -117,9 +212,9 @@ func (r *SQLiteRepository) CreateCase(ctx context.Context, c domain.CaseRecord) 
 
 	_, err = r.db.ExecContext(
 		ctx,
-		`INSERT INTO cases (id, title, status, spec_json, next_command, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		c.ID, c.Title, c.Status, string(spec), c.NextCommand, c.CreatedAt.Format(timestampFormat), c.UpdatedAt.Format(timestampFormat),
+		`INSERT INTO cases (id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.OwnerID, c.Title, c.Status, string(spec), c.NextCommand, 0, c.CreatedAt.Format(timestampFormat), c.UpdatedAt.Format(timestampFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("insert case: %w", err)
@@ -134,12 +229,14 @@ func (r *SQLiteRepository) UpdateCase(ctx context.Context, c domain.CaseRecord) 
 		return fmt.Errorf("marshal case spec: %w", err)
 	}
 
+	// Optimistic locking: use version check in WHERE clause
+	// Caller must increment c.Version before calling UpdateCase
 	res, err := r.db.ExecContext(
 		ctx,
 		`UPDATE cases
-		 SET title = ?, status = ?, spec_json = ?, next_command = ?, updated_at = ?
-		 WHERE id = ?`,
-		c.Title, c.Status, string(spec), c.NextCommand, c.UpdatedAt.Format(timestampFormat), c.ID,
+		 SET title = ?, status = ?, spec_json = ?, next_command = ?, version = ?, updated_at = ?
+		 WHERE id = ? AND version = ?`,
+		c.Title, c.Status, string(spec), c.NextCommand, c.Version, c.UpdatedAt.Format(timestampFormat), c.ID, c.Version-1,
 	)
 	if err != nil {
 		return fmt.Errorf("update case: %w", err)
@@ -149,14 +246,23 @@ func (r *SQLiteRepository) UpdateCase(ctx context.Context, c domain.CaseRecord) 
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if rows == 0 {
-		return ErrNotFound
+		// Check if case exists at all - if not, return ErrNotFound, otherwise ErrConcurrentModification
+		existsQuery := `SELECT 1 FROM cases WHERE id = ?`
+		var exists int
+		if err := r.db.QueryRowContext(ctx, existsQuery, c.ID).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		return ErrConcurrentModification
 	}
 
 	return nil
 }
 
 func (r *SQLiteRepository) GetCase(ctx context.Context, id string) (domain.CaseRecord, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, title, status, spec_json, next_command, created_at, updated_at FROM cases WHERE id = ?`, id)
+	row := r.db.QueryRowContext(ctx, `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases WHERE id = ?`, id)
 	return scanCase(row)
 }
 
@@ -184,7 +290,7 @@ func (r *SQLiteRepository) GetCaseWithRelations(ctx context.Context, id string) 
 }
 
 func (r *SQLiteRepository) ListCases(ctx context.Context) ([]domain.CaseRecord, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, title, status, spec_json, next_command, created_at, updated_at FROM cases ORDER BY created_at ASC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list cases: %w", err)
 	}
@@ -210,7 +316,7 @@ func (r *SQLiteRepository) ListCasesPaginated(ctx context.Context, cursor string
 		limit = 100
 	}
 
-	query := `SELECT id, title, status, spec_json, next_command, created_at, updated_at FROM cases ORDER BY created_at DESC LIMIT ?`
+	query := `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases ORDER BY created_at DESC LIMIT ?`
 	args := []any{limit + 1} // Request one extra to check hasMore
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -223,7 +329,7 @@ func (r *SQLiteRepository) ListCasesPaginated(ctx context.Context, cursor string
 	for rows.Next() {
 		var c domain.CaseRecord
 		var specJSON string
-		err := rows.Scan(&c.ID, &c.Title, &c.Status, &specJSON, &c.NextCommand, &c.CreatedAt, &c.UpdatedAt)
+		err := rows.Scan(&c.ID, &c.OwnerID, &c.Title, &c.Status, &specJSON, &c.NextCommand, &c.Version, &c.CreatedAt, &c.UpdatedAt)
 		if err != nil {
 			return nil, "", false, err
 		}
@@ -288,25 +394,67 @@ func (r *SQLiteRepository) ListEvents(ctx context.Context, caseID string) ([]dom
 	return out, rows.Err()
 }
 
-func (r *SQLiteRepository) CreateOrGetPendingApproval(ctx context.Context, a domain.Approval) (domain.Approval, error) {
-	existing, err := r.FindApprovalByCommand(ctx, a.CaseID, a.CommandIndex)
-	if err == nil && existing.Status == domain.ApprovalPending {
-		return existing, nil
+func (r *SQLiteRepository) ListEventsPaginated(ctx context.Context, caseID string, limit, offset int) ([]domain.EventEnvelope, int, error) {
+	if limit <= 0 {
+		limit = 100
 	}
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return domain.Approval{}, err
+	if limit > 1000 {
+		limit = 1000 // Max limit to prevent abuse
 	}
 
-	_, err = r.db.ExecContext(
-		ctx,
-		`INSERT INTO approvals (id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.CaseID, a.CommandIndex, a.CommandName, a.RiskClass, a.Status, a.Reason, a.DecidedBy, nullableTime(a.DecidedAt), a.CreatedAt.Format(timestampFormat),
-	)
+	// Get total count
+	var total int
+	err := r.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM events WHERE case_id = ?", caseID).Scan(&total)
 	if err != nil {
-		return domain.Approval{}, fmt.Errorf("insert approval: %w", err)
+		return nil, 0, err
 	}
-	return a, nil
+
+	// Get paginated events
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT sequence, case_id, type, payload_json, created_at 
+		FROM events 
+		WHERE case_id = ? 
+		ORDER BY sequence ASC 
+		LIMIT ? OFFSET ?`, caseID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list events paginated: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.EventEnvelope
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, e)
+	}
+
+	return out, total, rows.Err()
+}
+
+func (r *SQLiteRepository) CreateOrGetPendingApproval(ctx context.Context, a domain.Approval) (domain.Approval, error) {
+	// Use INSERT ... ON CONFLICT to atomically handle race condition
+	now := time.Now().UTC()
+
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO approvals (id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at)
+		VALUES (?, ?, ?, ?, ?, 'pending', '', '', NULL, ?)
+		ON CONFLICT(case_id, command_index) DO UPDATE SET
+			status = CASE 
+				WHEN approvals.status = 'pending' THEN 'pending' 
+				ELSE approvals.status 
+			END
+		RETURNING id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at`,
+		a.ID, a.CaseID, a.CommandIndex, a.CommandName, string(a.RiskClass), now)
+
+	if err != nil {
+		return domain.Approval{}, fmt.Errorf("create approval: %w", err)
+	}
+
+	// Fetch the approval to return it
+	return r.GetApproval(ctx, a.ID)
 }
 
 func (r *SQLiteRepository) GetApproval(ctx context.Context, id string) (domain.Approval, error) {
@@ -401,7 +549,7 @@ func scanCase(s scanner) (domain.CaseRecord, error) {
 	var specJSON string
 	var createdAt string
 	var updatedAt string
-	if err := s.Scan(&c.ID, &c.Title, &status, &specJSON, &c.NextCommand, &createdAt, &updatedAt); err != nil {
+	if err := s.Scan(&c.ID, &c.OwnerID, &c.Title, &status, &specJSON, &c.NextCommand, &c.Version, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.CaseRecord{}, ErrNotFound
 		}

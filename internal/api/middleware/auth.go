@@ -16,6 +16,11 @@ type JWTConfig struct {
 	Issuer          string
 }
 
+// TokenBlacklist interface for checking revoked tokens
+type TokenBlacklist interface {
+	IsRevoked(ctx context.Context, jti string) (bool, error)
+}
+
 type Claims struct {
 	UserID   string   `json:"user_id"`
 	Username string   `json:"username"`
@@ -23,9 +28,22 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func JWTAuth(config JWTConfig) Middleware {
+// JWTAuthenticator handles JWT authentication with optional token blacklist
+type JWTAuthenticator struct {
+	Config    JWTConfig
+	Blacklist TokenBlacklist
+}
+
+// NewJWTAuthenticator creates a new JWTAuthenticator instance
+func NewJWTAuthenticator(config JWTConfig) *JWTAuthenticator {
+	return &JWTAuthenticator{Config: config}
+}
+
+// Middleware returns an HTTP middleware for JWT authentication
+func (m *JWTAuthenticator) Middleware() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
 				http.Error(w, "missing_authorization_header", http.StatusUnauthorized)
@@ -37,37 +55,63 @@ func JWTAuth(config JWTConfig) Middleware {
 				return
 			}
 			tokenString := parts[1]
-			token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, errors.New("invalid signing method")
-				}
-				return []byte(config.Secret), nil
-			})
-			if err != nil || !token.Valid {
+			claims, err := m.ValidateToken(ctx, tokenString)
+			if err != nil {
 				http.Error(w, "invalid_token", http.StatusUnauthorized)
 				return
 			}
-			claims, ok := token.Claims.(*Claims)
-			if !ok {
-				http.Error(w, "invalid_claims", http.StatusUnauthorized)
-				return
-			}
-			if config.Issuer != "" {
-				issuer, err := claims.GetIssuer()
-				if err != nil {
-					http.Error(w, "invalid_claims", http.StatusUnauthorized)
-					return
-				}
-				if issuer != config.Issuer {
-					http.Error(w, "invalid_issuer", http.StatusUnauthorized)
-					return
-				}
-			}
-			ctx := context.WithValue(r.Context(), claimsContextKey, claims)
+			ctx = context.WithValue(ctx, claimsContextKey, claims)
 			r = r.WithContext(ctx)
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// ValidateToken validates a JWT token and checks the blacklist
+func (m *JWTAuthenticator) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("invalid signing method")
+		}
+		return []byte(m.Config.Secret), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok {
+		return nil, errors.New("invalid claims")
+	}
+	if m.Config.Issuer != "" {
+		issuer, err := claims.GetIssuer()
+		if err != nil {
+			return nil, errors.New("invalid_claims")
+		}
+		if issuer != m.Config.Issuer {
+			return nil, errors.New("invalid_issuer")
+		}
+	}
+
+	// Check blacklist for revoked tokens
+	if m.Blacklist != nil {
+		revoked, err := m.Blacklist.IsRevoked(ctx, claims.ID)
+		if err != nil {
+			return nil, err
+		}
+		if revoked {
+			return nil, errors.New("token has been revoked")
+		}
+	}
+
+	return claims, nil
+}
+
+// JWTAuth is kept for backwards compatibility - wraps JWTAuthenticator
+func JWTAuth(config JWTConfig) Middleware {
+	return NewJWTAuthenticator(config).Middleware()
 }
 
 func GenerateToken(config JWTConfig, userID, username string, roles []string) (string, error) {
@@ -84,26 +128,6 @@ func GenerateToken(config JWTConfig, userID, username string, roles []string) (s
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(config.Secret))
-}
-
-func ValidateToken(config JWTConfig, tokenString string) (*Claims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("invalid signing method")
-		}
-		return []byte(config.Secret), nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if !token.Valid {
-		return nil, errors.New("invalid token")
-	}
-	claims, ok := token.Claims.(*Claims)
-	if !ok {
-		return nil, errors.New("invalid claims")
-	}
-	return claims, nil
 }
 
 type contextKey string
@@ -128,4 +152,19 @@ func GetUserIDFromContext(ctx context.Context) string {
 		return ""
 	}
 	return claims.UserID
+}
+
+// HasRole checks if the claims contain the specified role
+func HasRole(claims *Claims, role string) bool {
+	for _, r := range claims.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
+// IsAdmin returns true if the claims have the admin role
+func IsAdmin(claims *Claims) bool {
+	return HasRole(claims, "admin")
 }

@@ -48,7 +48,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := api.NewServer(svc, repo.DB(), cfg.Auth.JWTSecret, cfg.Auth.JWTExpiryHours, cfg.Auth.JWTIssuer, cfg.Auth.TrustedProxies)
+	server := api.NewServer(svc, repo.DB(), repo.Blacklist, cfg.Auth.JWTSecret, cfg.Auth.JWTExpiryHours, cfg.Auth.JWTIssuer, cfg.Auth.TrustedProxies)
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Address,

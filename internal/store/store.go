@@ -7,7 +7,10 @@ import (
 	"hal-proxy/internal/domain"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound               = errors.New("not found")
+	ErrConcurrentModification = errors.New("concurrent modification detected")
+)
 
 type Repository interface {
 	Init(context.Context) error
@@ -19,6 +22,7 @@ type Repository interface {
 	ListCasesPaginated(ctx context.Context, cursor string, limit int) ([]domain.CaseRecord, string, bool, error)
 	AppendEvent(context.Context, domain.EventEnvelope) (domain.EventEnvelope, error)
 	ListEvents(context.Context, string) ([]domain.EventEnvelope, error)
+	ListEventsPaginated(ctx context.Context, caseID string, limit, offset int) ([]domain.EventEnvelope, int, error)
 	CreateOrGetPendingApproval(context.Context, domain.Approval) (domain.Approval, error)
 	GetApproval(context.Context, string) (domain.Approval, error)
 	FindApprovalByCommand(context.Context, string, int) (domain.Approval, error)

@@ -33,7 +33,7 @@ func TestCaseRunApprovalAndReportFlow(t *testing.T) {
 			{Name: "reset", Action: "reset", RiskClass: domain.RiskDestructive},
 			{Name: "read-again", Action: "read_mem", RiskClass: domain.RiskObserve},
 		},
-	})
+	}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

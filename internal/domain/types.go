@@ -89,10 +89,12 @@ type CaseCommandSpec struct {
 
 type CaseRecord struct {
 	ID          string     `json:"id"`
+	OwnerID     string     `json:"owner_id"`
 	Title       string     `json:"title"`
 	Status      CaseStatus `json:"status"`
 	Spec        CaseSpec   `json:"spec"`
 	NextCommand int        `json:"next_command"`
+	Version     int        `json:"version"` // Optimistic locking
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 }

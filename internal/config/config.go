@@ -95,7 +95,7 @@ func DefaultConfig() *Config {
 			Output: "stdout",
 		},
 		Auth: AuthConfig{
-			JWTSecret:      getEnv("HAL_PROXY_JWT_SECRET", ""),
+			JWTSecret:      getEnv("HAL_PROXY_JWT_SECRET", "UNCONFIGURED-REQUIRED-SET-HAL_PROXY_JWT_SECRET-32CHARS"),
 			JWTExpiryHours: 24,
 			JWTIssuer:      getEnv("HAL_PROXY_JWT_ISSUER", "hal-proxy"),
 			APIKeys:        parseAPIKeys(getEnv("HAL_PROXY_API_KEYS", "")),

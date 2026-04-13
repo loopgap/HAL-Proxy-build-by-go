@@ -51,6 +51,7 @@ func handleCase(ctx context.Context, svc *core.Service, args []string) {
 	case "new":
 		fs := flag.NewFlagSet("case new", flag.ExitOnError)
 		specPath := fs.String("spec", "", "path to case spec json")
+		actor := fs.String("actor", "cli", "actor name")
 		_ = fs.Parse(args[1:])
 		if *specPath == "" {
 			fatalf("--spec is required")
@@ -59,7 +60,7 @@ func handleCase(ctx context.Context, svc *core.Service, args []string) {
 		raw, err := os.ReadFile(*specPath)
 		exitOnErr(err)
 		exitOnErr(json.Unmarshal(raw, &spec))
-		c, err := svc.CreateCase(ctx, spec)
+		c, err := svc.CreateCase(ctx, spec, *actor)
 		exitOnErr(err)
 		writeJSON(c)
 	case "run":
@@ -76,11 +77,12 @@ func handleCase(ctx context.Context, svc *core.Service, args []string) {
 	case "show":
 		fs := flag.NewFlagSet("case show", flag.ExitOnError)
 		id := fs.String("id", "", "case id")
+		actor := fs.String("actor", "cli", "actor name")
 		_ = fs.Parse(args[1:])
 		if *id == "" {
 			fatalf("--id is required")
 		}
-		c, err := svc.GetCase(ctx, *id)
+		c, err := svc.GetCase(ctx, *id, *actor)
 		exitOnErr(err)
 		writeJSON(c)
 	case "events":
@@ -99,6 +101,9 @@ func handleCase(ctx context.Context, svc *core.Service, args []string) {
 }
 
 func handleApproval(ctx context.Context, svc *core.Service, args []string) {
+	// NOTE: Approving/rejecting approvals requires the user to have
+	// either "admin" or "approver" role in their JWT claims.
+	// Users without these roles will receive a 403 Forbidden response.
 	if len(args) == 0 {
 		fatalf("usage: bridge approval <ls|approve|reject>")
 	}

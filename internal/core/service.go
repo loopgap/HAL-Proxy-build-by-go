@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 	"time"
 
 	"hal-proxy/internal/domain"
-	"hal-proxy/internal/errors"
+	apperrors "hal-proxy/internal/errors"
 	"hal-proxy/internal/policy"
 	"hal-proxy/internal/store"
 
@@ -44,24 +45,54 @@ func (s *Service) Init(ctx context.Context) error {
 	return s.repo.Init(ctx)
 }
 
-// ListCases returns all cases from the repository
-func (s *Service) ListCases(ctx context.Context) ([]domain.CaseRecord, error) {
+// ListCases returns all cases from the repository filtered by ownerID
+func (s *Service) ListCases(ctx context.Context, ownerID string) ([]domain.CaseRecord, error) {
 	ctx, span := s.tracer.Start(ctx, "service.list_cases")
 	defer span.End()
-	return s.repo.ListCases(ctx)
+
+	cases, err := s.repo.ListCases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Filter by owner if specified
+	if ownerID != "" {
+		filtered := make([]domain.CaseRecord, 0, len(cases))
+		for _, c := range cases {
+			if c.OwnerID == ownerID {
+				filtered = append(filtered, c)
+			}
+		}
+		return filtered, nil
+	}
+	return cases, nil
 }
 
-func (s *Service) ListCasesPaginated(ctx context.Context, cursor string, limit int) ([]domain.CaseRecord, string, bool, error) {
-	return s.repo.ListCasesPaginated(ctx, cursor, limit)
+func (s *Service) ListCasesPaginated(ctx context.Context, cursor string, limit int, ownerID string) ([]domain.CaseRecord, string, bool, error) {
+	cases, nextCursor, hasMore, err := s.repo.ListCasesPaginated(ctx, cursor, limit)
+	if err != nil {
+		return nil, "", false, err
+	}
+	// Filter by owner if specified
+	if ownerID != "" {
+		filtered := make([]domain.CaseRecord, 0, len(cases))
+		for _, c := range cases {
+			if c.OwnerID == ownerID {
+				filtered = append(filtered, c)
+			}
+		}
+		return filtered, nextCursor, len(filtered) < len(cases), nil
+	}
+	return cases, nextCursor, hasMore, nil
 }
 
-func (s *Service) CreateCase(ctx context.Context, spec domain.CaseSpec) (domain.CaseRecord, error) {
+func (s *Service) CreateCase(ctx context.Context, spec domain.CaseSpec, actor string) (domain.CaseRecord, error) {
 	ctx, span := s.tracer.Start(ctx, "service.create_case")
 	defer span.End()
 
 	now := time.Now().UTC()
 	c := domain.CaseRecord{
 		ID:          newID("case"),
+		OwnerID:     actor,
 		Title:       spec.Title,
 		Status:      domain.CaseStatusReady,
 		Spec:        spec,
@@ -86,16 +117,31 @@ func (s *Service) CreateCase(ctx context.Context, spec domain.CaseSpec) (domain.
 	return c, nil
 }
 
-func (s *Service) GetCase(ctx context.Context, id string) (domain.CaseRecord, error) {
+func (s *Service) GetCase(ctx context.Context, id string, ownerID string) (domain.CaseRecord, error) {
 	ctx, span := s.tracer.Start(ctx, "service.get_case")
 	defer span.End()
-	return s.repo.GetCase(ctx, id)
+
+	c, err := s.repo.GetCase(ctx, id)
+	if err != nil {
+		return domain.CaseRecord{}, err
+	}
+	// Ownership check - return not found if not owner (prevents IDOR)
+	if ownerID != "" && c.OwnerID != ownerID {
+		return domain.CaseRecord{}, store.ErrNotFound
+	}
+	return c, nil
 }
 
 func (s *Service) ListEvents(ctx context.Context, caseID string) ([]domain.EventEnvelope, error) {
 	ctx, span := s.tracer.Start(ctx, "service.list_events")
 	defer span.End()
 	return s.repo.ListEvents(ctx, caseID)
+}
+
+func (s *Service) ListEventsPaginated(ctx context.Context, caseID string, limit, offset int) ([]domain.EventEnvelope, int, error) {
+	ctx, span := s.tracer.Start(ctx, "service.list_events_paginated")
+	defer span.End()
+	return s.repo.ListEventsPaginated(ctx, caseID, limit, offset)
 }
 
 func (s *Service) ListApprovals(ctx context.Context, caseID string) ([]domain.Approval, error) {
@@ -149,6 +195,7 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 			c.Status = domain.CaseStatusRejected
 		}
 		c.UpdatedAt = now
+		c.Version++
 		if err := s.repo.UpdateCase(ctx, c); err != nil {
 			return domain.Approval{}, err
 		}
@@ -165,16 +212,24 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 	if err != nil {
 		return RunResult{}, err
 	}
+	// Ownership check - only owner can run the case (prevents IDOR)
+	if c.OwnerID != actor {
+		return RunResult{}, store.ErrNotFound
+	}
 	if !c.Status.CanTransitionTo(domain.CaseStatusRunning) {
 		if c.Status.IsTerminal() {
-			return RunResult{}, errors.ErrCaseNotRunnable(c.ID, fmt.Sprintf("case is %s", c.Status))
+			return RunResult{}, apperrors.ErrCaseNotRunnable(c.ID, fmt.Sprintf("case is %s", c.Status))
 		}
-		return RunResult{}, errors.ErrCaseInvalidStatus(string(c.Status), string(domain.CaseStatusRunning))
+		return RunResult{}, apperrors.ErrCaseInvalidStatus(string(c.Status), string(domain.CaseStatusRunning))
 	}
 
 	c.Status = domain.CaseStatusRunning
 	c.UpdatedAt = time.Now().UTC()
+	c.Version++
 	if err := s.repo.UpdateCase(ctx, c); err != nil {
+		if errors.Is(err, store.ErrConcurrentModification) {
+			return RunResult{}, errors.New("case was modified by another request, please retry")
+		}
 		return RunResult{}, err
 	}
 	if err := s.appendEvent(ctx, c.ID, "bridge.case.run_requested", map[string]any{"actor": actor}); err != nil {
@@ -211,6 +266,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 				case domain.ApprovalPending:
 					c.Status = domain.CaseStatusPaused
 					c.UpdatedAt = time.Now().UTC()
+					c.Version++
 					if err := s.repo.UpdateCase(ctx, c); err != nil {
 						return RunResult{}, err
 					}
@@ -218,6 +274,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 				case domain.ApprovalRejected:
 					c.Status = domain.CaseStatusRejected
 					c.UpdatedAt = time.Now().UTC()
+					c.Version++
 					if err := s.repo.UpdateCase(ctx, c); err != nil {
 						return RunResult{}, err
 					}
@@ -235,6 +292,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 					}
 					c.NextCommand = idx + 1
 					c.UpdatedAt = time.Now().UTC()
+					c.Version++
 					if err := s.repo.UpdateCase(ctx, c); err != nil {
 						return RunResult{}, err
 					}
@@ -269,6 +327,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 
 				c.Status = domain.CaseStatusPaused
 				c.UpdatedAt = time.Now().UTC()
+				c.Version++
 				if err := s.repo.UpdateCase(ctx, c); err != nil {
 					return RunResult{}, err
 				}
@@ -284,6 +343,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 
 		c.NextCommand = idx + 1
 		c.UpdatedAt = time.Now().UTC()
+		c.Version++
 		if err := s.repo.UpdateCase(ctx, c); err != nil {
 			return RunResult{}, err
 		}
@@ -291,6 +351,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 
 	c.Status = domain.CaseStatusCompleted
 	c.UpdatedAt = time.Now().UTC()
+	c.Version++
 	if err := s.repo.UpdateCase(ctx, c); err != nil {
 		return RunResult{}, err
 	}
