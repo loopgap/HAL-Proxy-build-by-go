@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 
-	"hal-proxy/internal/core"
-	"hal-proxy/internal/domain"
-	"hal-proxy/internal/store"
+	"bridgeos/internal/core"
+	"bridgeos/internal/domain"
+	apperrors "bridgeos/internal/errors"
+	"bridgeos/internal/store"
+	"bridgeos/internal/version"
 )
 
 func main() {
@@ -23,7 +26,7 @@ func main() {
 
 	args := os.Args[1:]
 	if len(args) == 0 {
-		fatalf("usage: bridge <case|approval|report|device|session> ...")
+		fatalf("usage: bridge <case|approval|report|device|session|version> ...")
 	}
 
 	switch args[0] {
@@ -37,6 +40,13 @@ func main() {
 		handleDevice(ctx, svc, args[1:])
 	case "session":
 		handleSession(ctx, svc, args[1:])
+	case "version":
+		writeJSON(map[string]any{
+			"name":       version.AppName,
+			"version":    version.Version,
+			"commit":     version.Commit,
+			"build_date": version.BuildDate,
+		})
 	default:
 		fatalf("unknown command %q", args[0])
 	}
@@ -167,10 +177,13 @@ func handleSession(ctx context.Context, svc *core.Service, args []string) {
 }
 
 func dbPath() string {
+	if env := os.Getenv("BRIDGEOS_DB"); env != "" {
+		return env
+	}
 	if env := os.Getenv("HAL_PROXY_DB"); env != "" {
 		return env
 	}
-	return "hal-proxy.db"
+	return "bridgeos.db"
 }
 
 func writeJSON(v any) {
@@ -190,8 +203,19 @@ func exitOnErr(err error) {
 	}
 	enc := json.NewEncoder(os.Stderr)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(map[string]any{
-		"error": err.Error(),
-	})
+	payload := map[string]any{"error": "internal_server_error", "message": "An unexpected error occurred"}
+	var appErr *apperrors.AppError
+	if errors.As(err, &appErr) {
+		payload["error"] = appErr.Message
+		payload["message"] = appErr.Message
+		payload["code"] = appErr.Code
+	} else if errors.Is(err, store.ErrNotFound) {
+		payload["error"] = "resource_not_found"
+		payload["message"] = "Resource not found"
+	} else if errors.Is(err, store.ErrConcurrentModification) {
+		payload["error"] = "concurrent_modification"
+		payload["message"] = "Concurrent modification detected"
+	}
+	_ = enc.Encode(payload)
 	os.Exit(1)
 }

@@ -4,6 +4,10 @@
 
 # === Go ===
 # Binaries
+bridge
+bridgeosd
+bridge.exe
+bridgeosd.exe
 hal
 hal-proxy
 hal.exe
@@ -20,6 +24,7 @@ bin/
 
 # === Database ===
 # Local SQLite database
+bridgeos.db
 hal-proxy.db
 *.db
 
@@ -102,6 +107,14 @@ out/
 .sisyphus/evidence/
 *.evidence.*
 
-# === OpenTelemetry Exports ===
-*.otlp/
+# === Temporary ===
+release/
+.gocache/
+.tmp-smoke/
+*.db-shm
+*.db-wal
+coverage.out
+coverage.html
+bin/
 otel-exporter.log
+

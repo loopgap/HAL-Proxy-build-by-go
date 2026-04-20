@@ -21,7 +21,7 @@ export function useCases() {
       if (result.error) {
         throw new Error(result.error)
       }
-      return result.data ?? []
+      return result.data?.items ?? []
     },
   })
 }
@@ -51,7 +51,7 @@ export function useCaseEvents(id: string) {
       if (result.error) {
         throw new Error(result.error)
       }
-      return result.data ?? []
+      return result.data?.items ?? []
     },
     enabled: !!id,
     refetchInterval: 5000, // Poll every 5 seconds for real-time updates
@@ -95,6 +95,9 @@ export function useRunCase() {
         console.warn('Run case response missing case data')
         return
       }
+      queryClient.invalidateQueries({ queryKey: queryKeys.cases })
+      queryClient.invalidateQueries({ queryKey: queryKeys.approvals() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.reports })
       queryClient.invalidateQueries({ queryKey: queryKeys.case(data.case.id) })
       queryClient.invalidateQueries({ queryKey: queryKeys.caseEvents(data.case.id) })
       toast.success(`Case ${data.status ?? 'updated'}`)
@@ -131,9 +134,11 @@ export function useApproveApproval() {
       return result.data
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['approvals'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.approvals() })
       if (data?.case_id) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.cases })
         queryClient.invalidateQueries({ queryKey: queryKeys.case(data.case_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.caseEvents(data.case_id) })
       }
       toast.success('Approval granted')
     },
@@ -155,9 +160,11 @@ export function useRejectApproval() {
       return result.data
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['approvals'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.approvals() })
       if (data?.case_id) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.cases })
         queryClient.invalidateQueries({ queryKey: queryKeys.case(data.case_id) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.caseEvents(data.case_id) })
       }
       toast.success('Approval rejected')
     },
@@ -192,8 +199,11 @@ export function useBuildReport() {
       }
       return result.data
     },
-    onSuccess: () => {
+    onSuccess: (_, caseId) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.reports })
+      queryClient.invalidateQueries({ queryKey: queryKeys.cases })
+      queryClient.invalidateQueries({ queryKey: queryKeys.case(caseId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.caseEvents(caseId) })
       toast.success('Report built successfully')
     },
     onError: (error: Error) => {

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"hal-proxy/internal/domain"
+	"bridgeos/internal/domain"
 
 	_ "modernc.org/sqlite"
 )
@@ -119,16 +119,21 @@ func (r *SQLiteRepository) Init(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_approvals_case_id ON approvals(case_id);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_case_command ON approvals(case_id, command_index);`,
 		`CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);`,
+		`CREATE INDEX IF NOT EXISTS idx_cases_owner_id ON cases(owner_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_reports_case_id ON reports(case_id);`,
 		// Additional indexes for Wave 2 optimizations
 		`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);`,
-		`CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);`,
 	}
 
 	for _, stmt := range stmts {
 		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("init schema: %w", err)
 		}
+	}
+
+	// Migration: add version column to approvals if upgrading from older schema
+	if err := r.migrateAddApprovalVersionColumn(ctx); err != nil {
+		return fmt.Errorf("migration add approval version: %w", err)
 	}
 
 	return nil
@@ -204,6 +209,41 @@ func (r *SQLiteRepository) migrateAddOwnerIDColumn(ctx context.Context) error {
 	return nil
 }
 
+// migrateAddApprovalVersionColumn adds the version column to approvals table if it doesn't exist
+func (r *SQLiteRepository) migrateAddApprovalVersionColumn(ctx context.Context) error {
+	// Check if version column already exists
+	rows, err := r.db.QueryContext(ctx, `PRAGMA table_info(approvals)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasVersion := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dflt_value interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk); err != nil {
+			return err
+		}
+		if name == "version" {
+			hasVersion = true
+			break
+		}
+	}
+
+	if !hasVersion {
+		_, err = r.db.ExecContext(ctx, `ALTER TABLE approvals ADD COLUMN version INTEGER NOT NULL DEFAULT 0`)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *SQLiteRepository) CreateCase(ctx context.Context, c domain.CaseRecord) error {
 	spec, err := json.Marshal(c.Spec)
 	if err != nil {
@@ -253,7 +293,7 @@ func (r *SQLiteRepository) UpdateCase(ctx context.Context, c domain.CaseRecord) 
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
-			return err
+			return fmt.Errorf("UpdateCase: %w", err)
 		}
 		return ErrConcurrentModification
 	}
@@ -264,6 +304,50 @@ func (r *SQLiteRepository) UpdateCase(ctx context.Context, c domain.CaseRecord) 
 func (r *SQLiteRepository) GetCase(ctx context.Context, id string) (domain.CaseRecord, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases WHERE id = ?`, id)
 	return scanCase(row)
+}
+
+func (r *SQLiteRepository) DeleteCase(ctx context.Context, id string) error {
+	// Use transaction to ensure atomic deletion of case and related records
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete related events
+	if _, err := tx.ExecContext(ctx, `DELETE FROM events WHERE case_id = ?`, id); err != nil {
+		return fmt.Errorf("delete events: %w", err)
+	}
+
+	// Delete related approvals
+	if _, err := tx.ExecContext(ctx, `DELETE FROM approvals WHERE case_id = ?`, id); err != nil {
+		return fmt.Errorf("delete approvals: %w", err)
+	}
+
+	// Delete related reports
+	if _, err := tx.ExecContext(ctx, `DELETE FROM reports WHERE case_id = ?`, id); err != nil {
+		return fmt.Errorf("delete reports: %w", err)
+	}
+
+	// Delete the case
+	result, err := tx.ExecContext(ctx, `DELETE FROM cases WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete case: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
 }
 
 func (r *SQLiteRepository) GetCaseWithRelations(ctx context.Context, id string) (domain.CaseWithRelations, error) {
@@ -290,7 +374,8 @@ func (r *SQLiteRepository) GetCaseWithRelations(ctx context.Context, id string) 
 }
 
 func (r *SQLiteRepository) ListCases(ctx context.Context) ([]domain.CaseRecord, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases ORDER BY created_at ASC`)
+	// Limit to prevent unbounded memory growth - use ListCasesPaginated for large result sets
+	rows, err := r.db.QueryContext(ctx, `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases ORDER BY created_at ASC LIMIT 1000`)
 	if err != nil {
 		return nil, fmt.Errorf("list cases: %w", err)
 	}
@@ -495,16 +580,35 @@ func (r *SQLiteRepository) ListApprovals(ctx context.Context, caseID string) ([]
 }
 
 func (r *SQLiteRepository) UpdateApproval(ctx context.Context, a domain.Approval) error {
-	_, err := r.db.ExecContext(
+	// Optimistic locking: use version check in WHERE clause
+	// Caller must increment a.Version before calling UpdateApproval
+	res, err := r.db.ExecContext(
 		ctx,
 		`UPDATE approvals
-		 SET status = ?, reason = ?, decided_by = ?, decided_at = ?
-		 WHERE id = ?`,
-		a.Status, a.Reason, a.DecidedBy, nullableTime(a.DecidedAt), a.ID,
+		 SET status = ?, reason = ?, decided_by = ?, decided_at = ?, version = ?
+		 WHERE id = ? AND version = ?`,
+		a.Status, a.Reason, a.DecidedBy, nullableTime(a.DecidedAt), a.Version, a.ID, a.Version-1,
 	)
 	if err != nil {
 		return fmt.Errorf("update approval: %w", err)
 	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		// Check if approval exists at all - if not, return ErrNotFound, otherwise ErrConcurrentModification
+		existsQuery := `SELECT 1 FROM approvals WHERE id = ?`
+		var exists int
+		if err := r.db.QueryRowContext(ctx, existsQuery, a.ID).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("UpdateApproval: %w", err)
+		}
+		return ErrConcurrentModification
+	}
+
 	return nil
 }
 
@@ -521,22 +625,41 @@ func (r *SQLiteRepository) CreateReport(ctx context.Context, rep domain.ReportSu
 	return nil
 }
 
+func (r *SQLiteRepository) ListReports(ctx context.Context, caseID string) ([]domain.ReportSummary, error) {
+	query := `SELECT id, case_id, path, command_count, event_count, created_at FROM reports`
+	args := []any{}
+	if caseID != "" {
+		query += ` WHERE case_id = ?`
+		args = append(args, caseID)
+	}
+	query += ` ORDER BY created_at DESC`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list reports: %w", err)
+	}
+	defer rows.Close()
+
+	var reports []domain.ReportSummary
+	for rows.Next() {
+		rep, err := scanReport(rows)
+		if err != nil {
+			return nil, err
+		}
+		reports = append(reports, rep)
+	}
+
+	return reports, rows.Err()
+}
+
+func (r *SQLiteRepository) GetReport(ctx context.Context, id string) (domain.ReportSummary, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, path, command_count, event_count, created_at FROM reports WHERE id = ?`, id)
+	return scanReport(row)
+}
+
 func (r *SQLiteRepository) GetLatestReport(ctx context.Context, caseID string) (domain.ReportSummary, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, path, command_count, event_count, created_at FROM reports WHERE case_id = ? ORDER BY created_at DESC LIMIT 1`, caseID)
-	var rep domain.ReportSummary
-	var createdAt string
-	if err := row.Scan(&rep.ID, &rep.CaseID, &rep.Path, &rep.CommandCount, &rep.EventCount, &createdAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return domain.ReportSummary{}, ErrNotFound
-		}
-		return domain.ReportSummary{}, fmt.Errorf("scan report: %w", err)
-	}
-	var err error
-	rep.CreatedAt, err = time.Parse(timestampFormat, createdAt)
-	if err != nil {
-		return domain.ReportSummary{}, fmt.Errorf("parse created_at: %w", err)
-	}
-	return rep, nil
+	return scanReport(row)
 }
 
 type scanner interface {
@@ -575,12 +698,33 @@ func scanEvent(s scanner) (domain.EventEnvelope, error) {
 	var e domain.EventEnvelope
 	var payloadJSON string
 	var createdAt string
-	if err := s.Scan(&e.Sequence, &e.CaseID, &e.Type, &payloadJSON, &createdAt); err != nil {
-		return domain.EventEnvelope{}, fmt.Errorf("scan event: %w", err)
+	var err error
+	if err = s.Scan(&e.Sequence, &e.CaseID, &e.Type, &payloadJSON, &createdAt); err != nil {
+		return domain.EventEnvelope{}, fmt.Errorf("scanEvent: %w", err)
 	}
 	e.Payload = json.RawMessage(payloadJSON)
-	e.CreatedAt, _ = time.Parse(timestampFormat, createdAt)
+	e.CreatedAt, err = time.Parse(timestampFormat, createdAt)
+	if err != nil {
+		return domain.EventEnvelope{}, fmt.Errorf("scanEvent: %w", err)
+	}
 	return e, nil
+}
+
+func scanReport(s scanner) (domain.ReportSummary, error) {
+	var rep domain.ReportSummary
+	var createdAt string
+	if err := s.Scan(&rep.ID, &rep.CaseID, &rep.Path, &rep.CommandCount, &rep.EventCount, &createdAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ReportSummary{}, ErrNotFound
+		}
+		return domain.ReportSummary{}, fmt.Errorf("scan report: %w", err)
+	}
+	var err error
+	rep.CreatedAt, err = time.Parse(timestampFormat, createdAt)
+	if err != nil {
+		return domain.ReportSummary{}, fmt.Errorf("parse report created_at: %w", err)
+	}
+	return rep, nil
 }
 
 func scanApproval(s scanner) (domain.Approval, error) {
@@ -612,4 +756,130 @@ func nullableTime(t *time.Time) any {
 		return nil
 	}
 	return t.Format(timestampFormat)
+}
+
+// txWrapper wraps sql.Tx to implement the store.Tx interface
+type txWrapper struct {
+	tx *sql.Tx
+}
+
+func (t *txWrapper) Commit() error {
+	return t.tx.Commit()
+}
+
+func (t *txWrapper) Rollback() error {
+	return t.tx.Rollback()
+}
+
+// BeginTx starts a new transaction
+func (r *SQLiteRepository) BeginTx(ctx context.Context) (Tx, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	return &txWrapper{tx: tx}, nil
+}
+
+// UpdateCaseInTx updates a case within a transaction
+func (r *SQLiteRepository) UpdateCaseInTx(ctx context.Context, tx Tx, c domain.CaseRecord) error {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return fmt.Errorf("invalid transaction type")
+	}
+
+	spec, err := json.Marshal(c.Spec)
+	if err != nil {
+		return fmt.Errorf("marshal case spec: %w", err)
+	}
+
+	res, err := wrapper.tx.ExecContext(
+		ctx,
+		`UPDATE cases
+		 SET title = ?, status = ?, spec_json = ?, next_command = ?, version = ?, updated_at = ?
+		 WHERE id = ? AND version = ?`,
+		c.Title, c.Status, string(spec), c.NextCommand, c.Version, c.UpdatedAt.Format(timestampFormat), c.ID, c.Version-1,
+	)
+	if err != nil {
+		return fmt.Errorf("update case: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		existsQuery := `SELECT 1 FROM cases WHERE id = ?`
+		var exists int
+		if err := wrapper.tx.QueryRowContext(ctx, existsQuery, c.ID).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("UpdateCaseInTx: %w", err)
+		}
+		return ErrConcurrentModification
+	}
+
+	return nil
+}
+
+// AppendEventInTx appends an event within a transaction
+func (r *SQLiteRepository) AppendEventInTx(ctx context.Context, tx Tx, e domain.EventEnvelope) (domain.EventEnvelope, error) {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return domain.EventEnvelope{}, fmt.Errorf("invalid transaction type")
+	}
+
+	res, err := wrapper.tx.ExecContext(
+		ctx,
+		`INSERT INTO events (case_id, type, payload_json, created_at) VALUES (?, ?, ?, ?)`,
+		e.CaseID, e.Type, string(e.Payload), e.CreatedAt.Format(timestampFormat),
+	)
+	if err != nil {
+		return domain.EventEnvelope{}, fmt.Errorf("append event: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return domain.EventEnvelope{}, fmt.Errorf("event id: %w", err)
+	}
+	e.Sequence = id
+	return e, nil
+}
+
+// FindApprovalByCommandInTx finds an approval by case ID and command index within a transaction
+func (r *SQLiteRepository) FindApprovalByCommandInTx(ctx context.Context, tx Tx, caseID string, commandIndex int) (domain.Approval, error) {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return domain.Approval{}, fmt.Errorf("invalid transaction type")
+	}
+
+	row := wrapper.tx.QueryRowContext(ctx, `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at FROM approvals WHERE case_id = ? AND command_index = ? ORDER BY created_at DESC LIMIT 1`, caseID, commandIndex)
+	return scanApproval(row)
+}
+
+// CreateOrGetPendingApprovalInTx creates or gets a pending approval within a transaction
+func (r *SQLiteRepository) CreateOrGetPendingApprovalInTx(ctx context.Context, tx Tx, a domain.Approval) (domain.Approval, error) {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return domain.Approval{}, fmt.Errorf("invalid transaction type")
+	}
+
+	now := time.Now().UTC()
+
+	row := wrapper.tx.QueryRowContext(ctx, `
+		INSERT INTO approvals (id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at)
+		VALUES (?, ?, ?, ?, ?, 'pending', '', '', NULL, ?)
+		ON CONFLICT(case_id, command_index) DO UPDATE SET
+			status = CASE 
+				WHEN approvals.status = 'pending' THEN 'pending' 
+				ELSE approvals.status 
+			END
+		RETURNING id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at`,
+		a.ID, a.CaseID, a.CommandIndex, a.CommandName, string(a.RiskClass), now)
+
+	return scanApproval(row)
+}
+
+// CleanupExpiredTokens removes expired tokens from the blacklist
+func (r *SQLiteRepository) CleanupExpiredTokens(ctx context.Context) error {
+	return r.Blacklist.Cleanup(ctx)
 }

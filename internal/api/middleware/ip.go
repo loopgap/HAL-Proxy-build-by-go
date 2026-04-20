@@ -6,16 +6,20 @@ import (
 	"strings"
 )
 
-// isTrustedProxy checks if the remote address is from a trusted proxy
+// isTrustedProxy checks if the remote address is from a trusted proxy.
+// NOTE: Localhost connections (127.0.0.1, ::1, localhost) are NOT considered
+// trusted because they can be trivially spoofed by an attacker. X-Forwarded-For
+// headers from localhost connections should be ignored.
 func isTrustedProxy(remoteAddr string, trustedProxies []string) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		host = remoteAddr
 	}
 
-	// Check if the remote address is localhost or a trusted proxy
+	// Localhost addresses can be spoofed - they should NOT be trusted for header forwarding
+	// An attacker can easily spoof their source IP to 127.0.0.1 to bypass rate limiting
 	if host == "127.0.0.1" || host == "::1" || host == "localhost" {
-		return true
+		return false
 	}
 
 	for _, proxy := range trustedProxies {

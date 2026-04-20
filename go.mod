@@ -1,4 +1,4 @@
-module hal-proxy
+module bridgeos
 
 go 1.26.0
 

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"bridgeos/internal/version"
 )
 
 // Config holds all configuration for the application
@@ -53,11 +55,14 @@ type LogConfig struct {
 
 // AuthConfig holds authentication configuration
 type AuthConfig struct {
-	JWTSecret      string            `json:"jwt_secret"`
-	JWTExpiryHours int               `json:"jwt_expiry_hours"`
-	JWTIssuer      string            `json:"jwt_issuer"`
-	APIKeys        map[string]string `json:"api_keys"`
-	TrustedProxies []string          `json:"trusted_proxies"`
+	JWTSecret          string            `json:"jwt_secret"`
+	JWTExpiryHours     int               `json:"jwt_expiry_hours"`
+	JWTIssuer          string            `json:"jwt_issuer"`
+	APIKeys            map[string]string `json:"api_keys"`
+	TrustedProxies     []string          `json:"trusted_proxies"`
+	LocalTrusted       bool              `json:"local_trusted"`
+	LocalTrustedUserID string            `json:"local_trusted_user_id"`
+	LocalTrustedRoles  []string          `json:"local_trusted_roles"`
 }
 
 // RateLimitConfig holds rate limiting configuration
@@ -71,7 +76,7 @@ type RateLimitConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Address:        getEnv("HAL_PROXY_ADDR", ":8080"),
+			Address:        getEnvCompat("BRIDGEOS_ADDR", "HAL_PROXY_ADDR", ":8080"),
 			ReadTimeout:    30,
 			WriteTimeout:   30,
 			IdleTimeout:    120,
@@ -79,26 +84,29 @@ func DefaultConfig() *Config {
 			RequestTimeout: 30,
 		},
 		Database: DatabaseConfig{
-			Path:         getEnv("HAL_PROXY_DB", "hal-proxy.db"),
+			Path:         getEnvCompat("BRIDGEOS_DB", "HAL_PROXY_DB", "bridgeos.db"),
 			MaxOpenConns: 25,
 			MaxIdleConns: 5,
 		},
 		App: AppConfig{
-			Name:         "HAL-Proxy",
-			Version:      "1.0.0",
-			Environment:  getEnv("HAL_PROXY_ENV", "development"),
-			ArtifactsDir: getEnv("HAL_PROXY_ARTIFACTS", "artifacts"),
+			Name:         version.AppName,
+			Version:      version.Version,
+			Environment:  getEnvCompat("BRIDGEOS_ENV", "HAL_PROXY_ENV", "development"),
+			ArtifactsDir: getEnvCompat("BRIDGEOS_ARTIFACTS", "HAL_PROXY_ARTIFACTS", "artifacts"),
 		},
 		Log: LogConfig{
-			Level:  getEnv("HAL_PROXY_LOG_LEVEL", "info"),
+			Level:  getEnvCompat("BRIDGEOS_LOG_LEVEL", "HAL_PROXY_LOG_LEVEL", "info"),
 			Format: "json",
 			Output: "stdout",
 		},
 		Auth: AuthConfig{
-			JWTSecret:      getEnv("HAL_PROXY_JWT_SECRET", "UNCONFIGURED-REQUIRED-SET-HAL_PROXY_JWT_SECRET-32CHARS"),
-			JWTExpiryHours: 24,
-			JWTIssuer:      getEnv("HAL_PROXY_JWT_ISSUER", "hal-proxy"),
-			APIKeys:        parseAPIKeys(getEnv("HAL_PROXY_API_KEYS", "")),
+			JWTSecret:          getEnvCompat("BRIDGEOS_JWT_SECRET", "HAL_PROXY_JWT_SECRET", "UNCONFIGURED-REQUIRED-SET-BRIDGEOS_JWT_SECRET-32CHARS"),
+			JWTExpiryHours:     24,
+			JWTIssuer:          getEnvCompat("BRIDGEOS_JWT_ISSUER", "HAL_PROXY_JWT_ISSUER", "bridgeos"),
+			APIKeys:            parseAPIKeys(getEnvCompat("BRIDGEOS_API_KEYS", "HAL_PROXY_API_KEYS", "")),
+			LocalTrusted:       getEnvBoolCompat("BRIDGEOS_LOCAL_TRUSTED", "HAL_PROXY_LOCAL_TRUSTED", true),
+			LocalTrustedUserID: getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_USER_ID", "HAL_PROXY_LOCAL_TRUSTED_USER_ID", "local-agent"),
+			LocalTrustedRoles:  parseCSV(getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_ROLES", "HAL_PROXY_LOCAL_TRUSTED_ROLES", "admin,approver")),
 		},
 		RateLimit: RateLimitConfig{
 			Enabled:           true,
@@ -121,6 +129,25 @@ func parseAPIKeys(env string) map[string]string {
 		}
 	}
 	return keys
+}
+
+func parseCSV(env string) []string {
+	if env == "" {
+		return nil
+	}
+	parts := strings.Split(env, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func ConfigPathFromEnv() string {
+	return getEnvCompat("BRIDGEOS_CONFIG", "HAL_PROXY_CONFIG", "")
 }
 
 // Load loads configuration from a simple key=value file
@@ -249,30 +276,63 @@ func parseConfigLine(config *Config, line string) {
 
 // applyEnvOverrides applies environment variable overrides
 func (c *Config) applyEnvOverrides() {
-	if addr := os.Getenv("HAL_PROXY_ADDR"); addr != "" {
+	if addr := getEnvCompat("BRIDGEOS_ADDR", "HAL_PROXY_ADDR", ""); addr != "" {
 		c.Server.Address = addr
 	}
-	if db := os.Getenv("HAL_PROXY_DB"); db != "" {
+	if db := getEnvCompat("BRIDGEOS_DB", "HAL_PROXY_DB", ""); db != "" {
 		c.Database.Path = db
 	}
-	if artifacts := os.Getenv("HAL_PROXY_ARTIFACTS"); artifacts != "" {
+	if artifacts := getEnvCompat("BRIDGEOS_ARTIFACTS", "HAL_PROXY_ARTIFACTS", ""); artifacts != "" {
 		c.App.ArtifactsDir = artifacts
 	}
-	if env := os.Getenv("HAL_PROXY_ENV"); env != "" {
+	if env := getEnvCompat("BRIDGEOS_ENV", "HAL_PROXY_ENV", ""); env != "" {
 		c.App.Environment = env
 	}
-	if logLevel := os.Getenv("HAL_PROXY_LOG_LEVEL"); logLevel != "" {
+	if logLevel := getEnvCompat("BRIDGEOS_LOG_LEVEL", "HAL_PROXY_LOG_LEVEL", ""); logLevel != "" {
 		c.Log.Level = logLevel
 	}
-	if jwtSecret := os.Getenv("HAL_PROXY_JWT_SECRET"); jwtSecret != "" {
+	if jwtSecret := getEnvCompat("BRIDGEOS_JWT_SECRET", "HAL_PROXY_JWT_SECRET", ""); jwtSecret != "" {
 		c.Auth.JWTSecret = jwtSecret
 	}
-	if jwtIssuer := os.Getenv("HAL_PROXY_JWT_ISSUER"); jwtIssuer != "" {
+	if jwtIssuer := getEnvCompat("BRIDGEOS_JWT_ISSUER", "HAL_PROXY_JWT_ISSUER", ""); jwtIssuer != "" {
 		c.Auth.JWTIssuer = jwtIssuer
 	}
-	if apiKeys := os.Getenv("HAL_PROXY_API_KEYS"); apiKeys != "" {
+	if apiKeys := getEnvCompat("BRIDGEOS_API_KEYS", "HAL_PROXY_API_KEYS", ""); apiKeys != "" {
 		c.Auth.APIKeys = parseAPIKeys(apiKeys)
 	}
+	c.Auth.LocalTrusted = getEnvBoolCompat("BRIDGEOS_LOCAL_TRUSTED", "HAL_PROXY_LOCAL_TRUSTED", c.Auth.LocalTrusted)
+	if userID := getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_USER_ID", "HAL_PROXY_LOCAL_TRUSTED_USER_ID", ""); userID != "" {
+		c.Auth.LocalTrustedUserID = userID
+	}
+	if roles := getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_ROLES", "HAL_PROXY_LOCAL_TRUSTED_ROLES", ""); roles != "" {
+		c.Auth.LocalTrustedRoles = parseCSV(roles)
+	}
+}
+
+func getEnvCompat(primary, legacy, def string) string {
+	if value := os.Getenv(primary); value != "" {
+		return value
+	}
+	if value := os.Getenv(legacy); value != "" {
+		return value
+	}
+	return def
+}
+
+func getEnvBoolCompat(primary, legacy string, def bool) bool {
+	if value := os.Getenv(primary); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			return parsed
+		}
+	}
+	if value := os.Getenv(legacy); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return def
 }
 
 // Validate validates the configuration

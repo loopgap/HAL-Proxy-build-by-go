@@ -50,6 +50,9 @@ func CORS(config CORSConfig) Middleware {
 				} else {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 				}
+				if config.AllowCredentials {
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
 			}
 			if r.Method == http.MethodOptions {
 				w.Header().Set("Access-Control-Allow-Methods", strings.Join(config.AllowMethods, ", "))

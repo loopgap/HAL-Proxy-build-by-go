@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useReports } from '@/hooks/useApi'
+import { getReportContent } from '@/api/client'
 import { Table, type Column } from '@/components/ui/Table'
 import { Button } from '@/components/ui/Button'
 import { Download, Eye, RefreshCw } from 'lucide-react'
+import toast from 'react-hot-toast'
 import type { ReportSummary } from '@/types'
 
 function formatDate(dateStr: string): string {
@@ -15,6 +18,43 @@ function formatDate(dateStr: string): string {
 
 export default function ReportList() {
   const { data: reports, isLoading, error, refetch } = useReports()
+  const [activeReportId, setActiveReportId] = useState<string | null>(null)
+
+  async function withReportContent(report: ReportSummary, action: (body: string) => void) {
+    setActiveReportId(report.id)
+    try {
+      const result = await getReportContent(report.id)
+      if (result.error || !result.data) {
+        throw new Error(result.error || 'Failed to load report content')
+      }
+      action(result.data)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to load report content')
+    } finally {
+      setActiveReportId(null)
+    }
+  }
+
+  async function handleViewReport(report: ReportSummary) {
+    await withReportContent(report, (body) => {
+      const blob = new Blob([body], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    })
+  }
+
+  async function handleDownloadReport(report: ReportSummary) {
+    await withReportContent(report, (body) => {
+      const blob = new Blob([body], { type: 'text/markdown;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = report.path.split(/[\\/]/).pop() || `report-${report.id.slice(0, 8)}.md`
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    })
+  }
 
   const columns: Column<ReportSummary>[] = [
     {
@@ -55,21 +95,18 @@ export default function ReportList() {
           <Button
             size='sm'
             variant='ghost'
-            onClick={() => window.open(`/artifacts/${r.id}.md`, '_blank')}
+            onClick={() => { void handleViewReport(r) }}
             title='View Report'
+            disabled={activeReportId === r.id}
           >
             <Eye className='w-4 h-4' />
           </Button>
           <Button
             size='sm'
             variant='ghost'
-            onClick={() => {
-              const link = document.createElement('a')
-              link.href = `/artifacts/${r.id}.md`
-              link.download = `report-${r.id.slice(0, 8)}.md`
-              link.click()
-            }}
+            onClick={() => { void handleDownloadReport(r) }}
             title='Download Report'
+            disabled={activeReportId === r.id}
           >
             <Download className='w-4 h-4' />
           </Button>
@@ -105,7 +142,7 @@ export default function ReportList() {
 
       {!isLoading && (reports || []).length > 0 && (
         <div className='mt-4 text-sm text-gray-500 dark:text-gray-400'>
-          <p>Reports are stored locally. {reports?.length} report(s) found.</p>
+          <p>Reports are read from the BridgeOS store. {reports?.length} report(s) found.</p>
           <p className='mt-1'>
             <Link to='/cases' className='text-primary-600 hover:underline'>Go to Cases</Link>
             {' '}to run a case and generate a new report.

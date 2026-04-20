@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"hal-proxy/internal/domain"
-	apperrors "hal-proxy/internal/errors"
-	"hal-proxy/internal/policy"
-	"hal-proxy/internal/store"
+	"bridgeos/internal/domain"
+	apperrors "bridgeos/internal/errors"
+	"bridgeos/internal/policy"
+	"bridgeos/internal/store"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -37,7 +37,7 @@ func NewService(repo store.Repository, artifactsDir string) *Service {
 	return &Service{
 		repo:         repo,
 		artifactsDir: artifactsDir,
-		tracer:       otel.Tracer("hal-proxy/core"),
+		tracer:       otel.Tracer("bridgeos/core"),
 	}
 }
 
@@ -110,6 +110,7 @@ func (s *Service) CreateCase(ctx context.Context, spec domain.CaseSpec, actor st
 	if err := s.appendEvent(ctx, c.ID, "bridge.case.created", map[string]any{
 		"title":         c.Title,
 		"command_count": len(c.Spec.Commands),
+		"owner_id":      actor,
 	}); err != nil {
 		return domain.CaseRecord{}, err
 	}
@@ -156,7 +157,12 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 
 	approval, err := s.repo.GetApproval(ctx, approvalID)
 	if err != nil {
-		return domain.Approval{}, err
+		return domain.Approval{}, fmt.Errorf("get approval: %w", err)
+	}
+
+	// Idempotent: return current state if already resolved
+	if approval.Status == domain.ApprovalApproved || approval.Status == domain.ApprovalRejected {
+		return approval, nil
 	}
 
 	now := time.Now().UTC()
@@ -171,8 +177,12 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 	approval.DecidedBy = actor
 	approval.DecidedAt = &now
 	approval.Reason = reason
+	approval.Version++
 
 	if err := s.repo.UpdateApproval(ctx, approval); err != nil {
+		if errors.Is(err, store.ErrConcurrentModification) {
+			return domain.Approval{}, apperrors.ErrConflict("approval was modified by another actor")
+		}
 		return domain.Approval{}, err
 	}
 
@@ -189,14 +199,22 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 
 	c, err := s.repo.GetCase(ctx, approval.CaseID)
 	if err == nil && c.Status == domain.CaseStatusPaused {
+		var targetStatus domain.CaseStatus
 		if approval.Status == domain.ApprovalApproved {
-			c.Status = domain.CaseStatusReady
+			targetStatus = domain.CaseStatusReady
 		} else {
-			c.Status = domain.CaseStatusRejected
+			targetStatus = domain.CaseStatusRejected
 		}
+		if !c.Status.CanTransitionTo(targetStatus) {
+			return domain.Approval{}, fmt.Errorf("invalid case status transition from %s to %s", c.Status, targetStatus)
+		}
+		c.Status = targetStatus
 		c.UpdatedAt = now
 		c.Version++
 		if err := s.repo.UpdateCase(ctx, c); err != nil {
+			if errors.Is(err, store.ErrConcurrentModification) {
+				return domain.Approval{}, apperrors.ErrConflict("case was modified by another actor")
+			}
 			return domain.Approval{}, err
 		}
 	}
@@ -223,16 +241,23 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 		return RunResult{}, apperrors.ErrCaseInvalidStatus(string(c.Status), string(domain.CaseStatusRunning))
 	}
 
+	// Begin transaction for atomic operations
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return RunResult{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	c.Status = domain.CaseStatusRunning
 	c.UpdatedAt = time.Now().UTC()
 	c.Version++
-	if err := s.repo.UpdateCase(ctx, c); err != nil {
+	if err := s.repo.UpdateCaseInTx(ctx, tx, c); err != nil {
 		if errors.Is(err, store.ErrConcurrentModification) {
-			return RunResult{}, errors.New("case was modified by another request, please retry")
+			return RunResult{}, apperrors.ErrConflict("case was modified by another actor")
 		}
 		return RunResult{}, err
 	}
-	if err := s.appendEvent(ctx, c.ID, "bridge.case.run_requested", map[string]any{"actor": actor}); err != nil {
+	if err := s.appendEventInTx(ctx, tx, c.ID, "bridge.case.run_requested", map[string]any{"actor": actor}); err != nil {
 		return RunResult{}, err
 	}
 
@@ -240,7 +265,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 		cmd := c.Spec.Commands[idx]
 		risk := policy.NormalizeRisk(cmd.RiskClass)
 
-		if err := s.appendEvent(ctx, c.ID, "bridge.step.started", map[string]any{
+		if err := s.appendEventInTx(ctx, tx, c.ID, "bridge.step.started", map[string]any{
 			"command_index": idx,
 			"command_name":  cmd.Name,
 			"action":        cmd.Action,
@@ -249,7 +274,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 			return RunResult{}, err
 		}
 
-		if err := s.appendEvent(ctx, c.ID, "bridge.command.dispatched", map[string]any{
+		if err := s.appendEventInTx(ctx, tx, c.ID, "bridge.command.dispatched", map[string]any{
 			"command_index": idx,
 			"command_name":  cmd.Name,
 			"action":        cmd.Action,
@@ -260,40 +285,46 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 		}
 
 		if policy.RequiresApproval(risk) {
-			approval, err := s.repo.FindApprovalByCommand(ctx, c.ID, idx)
+			approval, err := s.repo.FindApprovalByCommandInTx(ctx, tx, c.ID, idx)
 			if err == nil {
 				switch approval.Status {
 				case domain.ApprovalPending:
 					c.Status = domain.CaseStatusPaused
 					c.UpdatedAt = time.Now().UTC()
 					c.Version++
-					if err := s.repo.UpdateCase(ctx, c); err != nil {
+					if err := s.repo.UpdateCaseInTx(ctx, tx, c); err != nil {
 						return RunResult{}, err
+					}
+					if err := tx.Commit(); err != nil {
+						return RunResult{}, fmt.Errorf("commit transaction: %w", err)
 					}
 					return RunResult{Case: c, Status: "awaiting_approval", PendingApproval: &approval}, nil
 				case domain.ApprovalRejected:
 					c.Status = domain.CaseStatusRejected
 					c.UpdatedAt = time.Now().UTC()
 					c.Version++
-					if err := s.repo.UpdateCase(ctx, c); err != nil {
+					if err := s.repo.UpdateCaseInTx(ctx, tx, c); err != nil {
 						return RunResult{}, err
+					}
+					if err := tx.Commit(); err != nil {
+						return RunResult{}, fmt.Errorf("commit transaction: %w", err)
 					}
 					return RunResult{Case: c, Status: "rejected", PendingApproval: &approval}, nil
 				case domain.ApprovalApproved:
-					if err := s.appendEvent(ctx, c.ID, "bridge.approval.accepted", map[string]any{
+					if err := s.appendEventInTx(ctx, tx, c.ID, "bridge.approval.accepted", map[string]any{
 						"approval_id":   approval.ID,
 						"command_index": idx,
 						"command_name":  cmd.Name,
 					}); err != nil {
 						return RunResult{}, err
 					}
-					if err := s.appendObservation(ctx, c, idx, cmd); err != nil {
+					if err := s.appendObservationInTx(ctx, tx, c, idx, cmd); err != nil {
 						return RunResult{}, err
 					}
 					c.NextCommand = idx + 1
 					c.UpdatedAt = time.Now().UTC()
 					c.Version++
-					if err := s.repo.UpdateCase(ctx, c); err != nil {
+					if err := s.repo.UpdateCaseInTx(ctx, tx, c); err != nil {
 						return RunResult{}, err
 					}
 					continue
@@ -311,11 +342,11 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 						Status:       domain.ApprovalPending,
 						CreatedAt:    time.Now().UTC(),
 					}
-					approval, err = s.repo.CreateOrGetPendingApproval(ctx, pending)
+					approval, err = s.repo.CreateOrGetPendingApprovalInTx(ctx, tx, pending)
 					if err != nil {
 						return RunResult{}, err
 					}
-					if err := s.appendEvent(ctx, c.ID, "bridge.approval.requested", map[string]any{
+					if err := s.appendEventInTx(ctx, tx, c.ID, "bridge.approval.requested", map[string]any{
 						"approval_id":   approval.ID,
 						"command_index": idx,
 						"command_name":  cmd.Name,
@@ -328,8 +359,11 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 				c.Status = domain.CaseStatusPaused
 				c.UpdatedAt = time.Now().UTC()
 				c.Version++
-				if err := s.repo.UpdateCase(ctx, c); err != nil {
+				if err := s.repo.UpdateCaseInTx(ctx, tx, c); err != nil {
 					return RunResult{}, err
+				}
+				if err := tx.Commit(); err != nil {
+					return RunResult{}, fmt.Errorf("commit transaction: %w", err)
 				}
 				return RunResult{Case: c, Status: "awaiting_approval", PendingApproval: &approval}, nil
 			}
@@ -337,28 +371,34 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 			return RunResult{}, err
 		}
 
-		if err := s.appendObservation(ctx, c, idx, cmd); err != nil {
+		if err := s.appendObservationInTx(ctx, tx, c, idx, cmd); err != nil {
 			return RunResult{}, err
 		}
 
 		c.NextCommand = idx + 1
 		c.UpdatedAt = time.Now().UTC()
 		c.Version++
-		if err := s.repo.UpdateCase(ctx, c); err != nil {
+		if err := s.repo.UpdateCaseInTx(ctx, tx, c); err != nil {
 			return RunResult{}, err
 		}
 	}
 
-	c.Status = domain.CaseStatusCompleted
-	c.UpdatedAt = time.Now().UTC()
-	c.Version++
-	if err := s.repo.UpdateCase(ctx, c); err != nil {
-		return RunResult{}, err
-	}
-	if err := s.appendEvent(ctx, c.ID, "bridge.case.completed", map[string]any{
+	// Append completion event BEFORE updating status for atomicity
+	// If status update fails after event is appended, both roll back together
+	if err := s.appendEventInTx(ctx, tx, c.ID, "bridge.case.completed", map[string]any{
 		"completed_commands": c.NextCommand,
 	}); err != nil {
 		return RunResult{}, err
+	}
+	c.Status = domain.CaseStatusCompleted
+	c.UpdatedAt = time.Now().UTC()
+	c.Version++
+	if err := s.repo.UpdateCaseInTx(ctx, tx, c); err != nil {
+		return RunResult{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return RunResult{}, fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return RunResult{Case: c, Status: "completed"}, nil
@@ -394,7 +434,9 @@ func (s *Service) BuildReport(ctx context.Context, caseID string) (domain.Report
 		return domain.ReportSummary{}, fmt.Errorf("write report: %w", err)
 	}
 	if err := s.repo.CreateReport(ctx, rep); err != nil {
-		return domain.ReportSummary{}, err
+		// DB insert failed - remove orphaned file to maintain atomicity
+		_ = os.Remove(rep.Path)
+		return domain.ReportSummary{}, fmt.Errorf("create report record: %w", err)
 	}
 	if err := s.appendEvent(ctx, c.ID, "bridge.report.generated", map[string]any{
 		"report_id": rep.ID,
@@ -406,6 +448,47 @@ func (s *Service) BuildReport(ctx context.Context, caseID string) (domain.Report
 	return rep, nil
 }
 
+func (s *Service) ListReports(ctx context.Context, caseID string) ([]domain.ReportSummary, error) {
+	ctx, span := s.tracer.Start(ctx, "service.list_reports")
+	defer span.End()
+
+	return s.repo.ListReports(ctx, caseID)
+}
+
+func (s *Service) GetReport(ctx context.Context, reportID string) (domain.ReportSummary, error) {
+	ctx, span := s.tracer.Start(ctx, "service.get_report")
+	defer span.End()
+
+	report, err := s.repo.GetReport(ctx, reportID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return domain.ReportSummary{}, apperrors.ErrReportNotFound(reportID)
+		}
+		return domain.ReportSummary{}, err
+	}
+	return report, nil
+}
+
+func (s *Service) GetReportContent(ctx context.Context, reportID string) (domain.ReportSummary, []byte, error) {
+	ctx, span := s.tracer.Start(ctx, "service.get_report_content")
+	defer span.End()
+
+	report, err := s.GetReport(ctx, reportID)
+	if err != nil {
+		return domain.ReportSummary{}, nil, err
+	}
+
+	body, err := os.ReadFile(report.Path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return domain.ReportSummary{}, nil, apperrors.ErrReportContentMissing(reportID)
+		}
+		return domain.ReportSummary{}, nil, err
+	}
+
+	return report, body, nil
+}
+
 func (s *Service) ListDevices(ctx context.Context) ([]domain.DeviceDescriptor, error) {
 	return []domain.DeviceDescriptor{
 		{
@@ -413,12 +496,14 @@ func (s *Service) ListDevices(ctx context.Context) ([]domain.DeviceDescriptor, e
 			Name:         "Primary Bridge Controller",
 			Capabilities: []string{"execute", "monitor", "configure"},
 			SupportLevel: "full",
+			Source:       "mock",
 		},
 		{
 			ID:           "dev-002",
 			Name:         "Secondary Bridge Controller",
 			Capabilities: []string{"execute", "monitor"},
 			SupportLevel: "partial",
+			Source:       "mock",
 		},
 	}, nil
 }
@@ -430,6 +515,7 @@ func (s *Service) ListSessions(ctx context.Context) ([]domain.SessionRecord, err
 			DeviceID:  "dev-001",
 			Status:    "active",
 			Owner:     "system",
+			Source:    "mock",
 			CreatedAt: time.Now().Add(-time.Hour),
 		},
 	}, nil
@@ -460,9 +546,34 @@ func (s *Service) appendEvent(ctx context.Context, caseID, eventType string, pay
 	return err
 }
 
+func (s *Service) appendEventInTx(ctx context.Context, tx store.Tx, caseID, eventType string, payload map[string]any) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal event payload: %w", err)
+	}
+	_, err = s.repo.AppendEventInTx(ctx, tx, domain.EventEnvelope{
+		CaseID:    caseID,
+		Type:      eventType,
+		Payload:   raw,
+		CreatedAt: time.Now().UTC(),
+	})
+	return err
+}
+
+func (s *Service) appendObservationInTx(ctx context.Context, tx store.Tx, c domain.CaseRecord, idx int, cmd domain.CaseCommandSpec) error {
+	observation := map[string]any{
+		"command_index": idx,
+		"command_name":  cmd.Name,
+		"action":        cmd.Action,
+		"summary":       fmt.Sprintf("simulated %s", cmd.Action),
+		"parameters":    cmd.Parameters,
+	}
+	return s.appendEventInTx(ctx, tx, c.ID, "bridge.observation.recorded", observation)
+}
+
 func reportMarkdown(c domain.CaseRecord, events []domain.EventEnvelope, approvals []domain.Approval) string {
 	lines := []string{
-		"# HAL-Proxy Report",
+		"# BridgeOS Report",
 		"",
 		fmt.Sprintf("- Case ID: `%s`", c.ID),
 		fmt.Sprintf("- Title: `%s`", c.Title),

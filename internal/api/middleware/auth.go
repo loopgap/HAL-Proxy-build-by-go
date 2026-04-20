@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 type JWTConfig struct {
@@ -74,7 +75,7 @@ func (m *JWTAuthenticator) ValidateToken(ctx context.Context, tokenString string
 			return nil, errors.New("invalid signing method")
 		}
 		return []byte(m.Config.Secret), nil
-	})
+	}, jwt.WithExpirationRequired())
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +121,7 @@ func GenerateToken(config JWTConfig, userID, username string, roles []string) (s
 		Username: username,
 		Roles:    roles,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.New().String(),
 			Issuer:    config.Issuer,
 			Subject:   userID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(config.ExpirationHours) * time.Hour)),
@@ -146,6 +148,10 @@ func GetClaimsFromContext(ctx context.Context) (*Claims, bool) {
 	return nil, false
 }
 
+func ContextWithClaims(ctx context.Context, claims *Claims) context.Context {
+	return context.WithValue(ctx, claimsContextKey, claims)
+}
+
 func GetUserIDFromContext(ctx context.Context) string {
 	claims, ok := GetClaimsFromContext(ctx)
 	if !ok || claims == nil {
@@ -156,6 +162,9 @@ func GetUserIDFromContext(ctx context.Context) string {
 
 // HasRole checks if the claims contain the specified role
 func HasRole(claims *Claims, role string) bool {
+	if claims == nil {
+		return false
+	}
 	for _, r := range claims.Roles {
 		if r == role {
 			return true

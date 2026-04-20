@@ -31,12 +31,12 @@ jobs:
         run: go mod download
       
       - name: Run Go tests with race detection
-        run: go test -v -race -cover ./...
+        run: go test -v -race -cover ./cmd/... ./internal/...
       
       - name: Build Go binaries
         run: |
           go build -o bin/bridge ./cmd/bridge
-          go build -o bin/hal-proxyd ./cmd/hal-proxyd
+          go build -o bin/bridgeosd ./cmd/bridgeosd
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -113,8 +113,8 @@ jobs:
           file: ./Dockerfile.backend
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
-            hal-proxy/hal-proxyd:${{ github.sha }}
-            hal-proxy/hal-proxyd:latest
+            bridgeos/bridgeosd:${{ github.sha }}
+            bridgeos/bridgeosd:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -173,7 +173,7 @@ jobs:
       
       - name: Generate coverage report
         run: |
-          go test -race -coverprofile=coverage.out ./...
+          go test -race -coverprofile=coverage.out ./cmd/... ./internal/...
           go tool cover -html=coverage.out -o coverage.html
       
       - name: Upload coverage to Codecov

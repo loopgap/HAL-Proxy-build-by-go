@@ -2,42 +2,56 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"hal-proxy/internal/core"
-	"hal-proxy/internal/domain"
-	apperrors "hal-proxy/internal/errors"
-	"hal-proxy/internal/metrics"
-	"hal-proxy/internal/store"
+	"bridgeos/internal/core"
+	"bridgeos/internal/domain"
+	apperrors "bridgeos/internal/errors"
+	"bridgeos/internal/metrics"
+	"bridgeos/internal/store"
+	"bridgeos/internal/version"
 
-	"hal-proxy/internal/api/dto"
-	"hal-proxy/internal/api/middleware"
+	"bridgeos/internal/api/middleware"
 )
 
 // MaxBodySize limits request body to 1MB for security
 const MaxBodySize = 1 << 20 // 1MB
 
 // RequestTimeout sets the maximum duration for request processing
-const RequestTimeout = 30 * 1e9 // 30 seconds in nanoseconds
+const RequestTimeout = 30 * time.Second
 
 // Server handles HTTP API requests with security best practices
 type Server struct {
 	svc            *core.Service
-	db             *sql.DB
-	blacklist      *store.TokenBlacklist
+	healthChecker  healthChecker
+	blacklist      tokenRevocationStore
 	authMiddleware func(http.Handler) http.Handler
 	trustedProxies []string
+	localTrusted   bool
+	localActor     string
+	localRoles     []string
+}
+
+type healthChecker interface {
+	PingContext(context.Context) error
+}
+
+type tokenRevocationStore interface {
+	Add(context.Context, string, time.Time) error
+	IsRevoked(context.Context, string) (bool, error)
 }
 
 // NewServer creates a new API server instance
-func NewServer(svc *core.Service, db *sql.DB, blacklist *store.TokenBlacklist, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string) *Server {
+func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRevocationStore, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string, localTrusted bool, localActor string, localRoles []string) *Server {
 	jwtConfig := middleware.JWTConfig{
 		Secret:          jwtSecret,
 		ExpirationHours: jwtExpiryHours,
@@ -46,7 +60,7 @@ func NewServer(svc *core.Service, db *sql.DB, blacklist *store.TokenBlacklist, j
 
 	var authMW func(http.Handler) http.Handler
 	if jwtConfig.Secret == "" {
-		log.Fatal("FATAL: JWT secret is required. Set HAL_PROXY_JWT_SECRET environment variable.")
+		log.Fatal("FATAL: JWT secret is required. Set BRIDGEOS_JWT_SECRET or HAL_PROXY_JWT_SECRET.")
 	}
 
 	jwtAuth := middleware.NewJWTAuthenticator(jwtConfig)
@@ -57,10 +71,13 @@ func NewServer(svc *core.Service, db *sql.DB, blacklist *store.TokenBlacklist, j
 
 	return &Server{
 		svc:            svc,
-		db:             db,
+		healthChecker:  healthChecker,
 		blacklist:      blacklist,
 		authMiddleware: authMW,
 		trustedProxies: trustedProxies,
+		localTrusted:   localTrusted,
+		localActor:     localActor,
+		localRoles:     localRoles,
 	}
 }
 
@@ -80,9 +97,15 @@ func normalizePath(path string) string {
 	switch {
 	case path == "/v1/health":
 		return "/v1/health"
+	case path == "/v1/health/ready":
+		return "/v1/health/ready"
+	case path == "/v1/health/live":
+		return "/v1/health/live"
 	case path == "/v1/cases":
 		return "/v1/cases"
 	case strings.HasPrefix(path, "/v1/cases/") && strings.HasSuffix(path, "/run"):
+		return "/v1/cases/{id}/run"
+	case strings.HasPrefix(path, "/v1/cases/") && strings.HasSuffix(path, ":run"):
 		return "/v1/cases/{id}/run"
 	case strings.HasPrefix(path, "/v1/cases/") && strings.HasSuffix(path, "/events"):
 		return "/v1/cases/{id}/events"
@@ -92,9 +115,21 @@ func normalizePath(path string) string {
 		return "/v1/approvals"
 	case strings.HasPrefix(path, "/v1/approvals/") && strings.HasSuffix(path, "/approve"):
 		return "/v1/approvals/{id}/approve"
+	case strings.HasPrefix(path, "/v1/approvals/") && strings.HasSuffix(path, ":approve"):
+		return "/v1/approvals/{id}/approve"
 	case strings.HasPrefix(path, "/v1/approvals/") && strings.HasSuffix(path, "/reject"):
 		return "/v1/approvals/{id}/reject"
+	case strings.HasPrefix(path, "/v1/approvals/") && strings.HasSuffix(path, ":reject"):
+		return "/v1/approvals/{id}/reject"
+	case path == "/v1/reports":
+		return "/v1/reports"
+	case strings.HasPrefix(path, "/v1/reports/") && strings.HasSuffix(path, "/content"):
+		return "/v1/reports/{id}/content"
+	case strings.HasPrefix(path, "/v1/reports/") && !strings.HasSuffix(path, "/build") && !strings.HasSuffix(path, ":build"):
+		return "/v1/reports/{id}"
 	case strings.HasPrefix(path, "/v1/reports/") && strings.HasSuffix(path, "/build"):
+		return "/v1/reports/{case_id}/build"
+	case strings.HasPrefix(path, "/v1/reports/") && strings.HasSuffix(path, ":build"):
 		return "/v1/reports/{case_id}/build"
 	case path == "/v1/sessions":
 		return "/v1/sessions"
@@ -147,13 +182,18 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 
 	// Apply auth middleware for protected routes (skip health check)
-	if r.URL.Path != "/v1/health" {
-		authHandler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	if requiresAuth(r.URL.Path) {
+		if s.shouldTrustLocalRequest(r) {
+			r = s.withTrustedLocalClaims(r)
 			s.routeInternal(w, r)
-		}))
-		authHandler.ServeHTTP(w, r)
+		} else {
+			authHandler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				s.routeInternal(w, r)
+			}))
+			authHandler.ServeHTTP(w, r)
+		}
 	} else {
-		// Health check endpoint (no auth required)
+		// Health check endpoints (no auth required)
 		s.routeInternal(w, r)
 	}
 
@@ -163,19 +203,55 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	metrics.HTTPRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
 }
 
-func statusCodeToString(code int) string {
-	switch {
-	case code >= 200 && code < 300:
-		return "2xx"
-	case code >= 300 && code < 400:
-		return "3xx"
-	case code >= 400 && code < 500:
-		return "4xx"
-	case code >= 500:
-		return "5xx"
+func requiresAuth(path string) bool {
+	switch path {
+	case "/v1/health", "/v1/health/ready", "/v1/health/live":
+		return false
 	default:
-		return "unknown"
+		return true
 	}
+}
+
+func (s *Server) shouldTrustLocalRequest(r *http.Request) bool {
+	if !s.localTrusted {
+		return false
+	}
+	if r.Header.Get("Authorization") != "" || r.Header.Get("X-API-Key") != "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	host = strings.TrimSpace(host)
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (s *Server) withTrustedLocalClaims(r *http.Request) *http.Request {
+	actor := strings.TrimSpace(r.Header.Get("X-BridgeOS-Actor"))
+	if actor == "" {
+		actor = s.localActor
+	}
+	if actor == "" {
+		actor = "local-agent"
+	}
+	roles := append([]string(nil), s.localRoles...)
+	if headerRoles := strings.TrimSpace(r.Header.Get("X-BridgeOS-Roles")); headerRoles != "" {
+		roles = strings.Split(headerRoles, ",")
+		for i := range roles {
+			roles[i] = strings.TrimSpace(roles[i])
+		}
+	}
+	claims := &middleware.Claims{
+		UserID:   actor,
+		Username: actor,
+		Roles:    roles,
+	}
+	return r.WithContext(middleware.ContextWithClaims(r.Context(), claims))
 }
 
 func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
@@ -194,9 +270,8 @@ func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
 		s.handleCreateCase(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/cases":
 		s.handleListCases(w, r)
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/cases/"):
-		s.handleGetCase(w, r)
-	case strings.HasPrefix(r.URL.Path, "/v1/cases/") && strings.HasSuffix(r.URL.Path, "/run"):
+	case strings.HasPrefix(r.URL.Path, "/v1/cases/") && (strings.HasSuffix(r.URL.Path, "/run") || strings.HasSuffix(r.URL.Path, ":run")):
+		// Temporary compatibility path: keep `:run` during 0.2.x transition.
 		if r.Method == http.MethodPost {
 			s.handleRunCase(w, r)
 		} else {
@@ -208,17 +283,21 @@ func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
 		}
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/cases/"):
+		s.handleGetCase(w, r)
 
 	// Approval management
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/approvals":
 		s.handleListApprovals(w, r)
-	case strings.HasPrefix(r.URL.Path, "/v1/approvals/") && strings.HasSuffix(r.URL.Path, "/approve"):
+	case strings.HasPrefix(r.URL.Path, "/v1/approvals/") && (strings.HasSuffix(r.URL.Path, "/approve") || strings.HasSuffix(r.URL.Path, ":approve")):
+		// Temporary compatibility path: keep `:approve` during 0.2.x transition.
 		if r.Method == http.MethodPost {
 			s.handleResolveApproval(w, r, "approve")
 		} else {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
 		}
-	case strings.HasPrefix(r.URL.Path, "/v1/approvals/") && strings.HasSuffix(r.URL.Path, "/reject"):
+	case strings.HasPrefix(r.URL.Path, "/v1/approvals/") && (strings.HasSuffix(r.URL.Path, "/reject") || strings.HasSuffix(r.URL.Path, ":reject")):
+		// Temporary compatibility path: keep `:reject` during 0.2.x transition.
 		if r.Method == http.MethodPost {
 			s.handleResolveApproval(w, r, "reject")
 		} else {
@@ -226,7 +305,14 @@ func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
 		}
 
 	// Report management
-	case strings.HasPrefix(r.URL.Path, "/v1/reports/") && strings.HasSuffix(r.URL.Path, "/build"):
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/reports":
+		s.handleListReports(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/reports/") && strings.HasSuffix(r.URL.Path, "/content"):
+		s.handleGetReportContent(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/reports/") && !strings.HasSuffix(r.URL.Path, "/build") && !strings.HasSuffix(r.URL.Path, ":build"):
+		s.handleGetReport(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/reports/") && (strings.HasSuffix(r.URL.Path, "/build") || strings.HasSuffix(r.URL.Path, ":build")):
+		// Temporary compatibility path: keep `:build` during 0.2.x transition.
 		if r.Method == http.MethodPost {
 			s.handleBuildReport(w, r)
 		} else {
@@ -249,22 +335,37 @@ func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 	}
 }
+func statusCodeToString(code int) string {
+	switch {
+	case code >= 200 && code < 300:
+		return "2xx"
+	case code >= 300 && code < 400:
+		return "3xx"
+	case code >= 400 && code < 500:
+		return "4xx"
+	case code >= 500:
+		return "5xx"
+	default:
+		return "unknown"
+	}
+}
 
 // handleHealthCheck returns server health status
 func (s *Server) handleHealthCheck(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":  "healthy",
-		"version": "1.0.0",
+		"name":    version.AppName,
+		"version": version.Version,
 	})
 }
 
 // handleHealthReady returns server readiness with database connectivity check
 func (s *Server) handleHealthReady(w http.ResponseWriter) {
-	if s.db == nil {
+	if s.healthChecker == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "reason": "no_database"})
 		return
 	}
-	if err := s.db.PingContext(context.Background()); err != nil {
+	if err := s.healthChecker.PingContext(context.Background()); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "reason": "database_unreachable"})
 		return
 	}
@@ -330,13 +431,8 @@ func (s *Server) handleListCases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := make([]dto.CaseResponse, len(cases))
-	for i, c := range cases {
-		items[i] = dto.ToCaseResponse(c)
-	}
-
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":       items,
+		"items":       cases,
 		"next_cursor": nextCursor,
 		"has_more":    hasMore,
 	})
@@ -347,6 +443,23 @@ func (s *Server) handleListCases(w http.ResponseWriter, r *http.Request) {
 func extractID(r *http.Request, prefix, suffix string) (string, bool) {
 	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), suffix)
 	return id, id != "" && !strings.Contains(id, "..")
+}
+
+func extractActionID(r *http.Request, prefix string, suffixes ...string) (string, bool) {
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(r.URL.Path, suffix) {
+			return extractID(r, prefix, suffix)
+		}
+	}
+	return "", false
+}
+
+func extractReportID(r *http.Request) (string, bool) {
+	id := strings.TrimPrefix(r.URL.Path, "/v1/reports/")
+	if strings.HasSuffix(id, "/content") {
+		id = strings.TrimSuffix(id, "/content")
+	}
+	return id, id != "" && !strings.Contains(id, "/") && !strings.Contains(id, "..")
 }
 
 func (s *Server) handleGetCase(w http.ResponseWriter, r *http.Request) {
@@ -389,7 +502,7 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRunCase(w http.ResponseWriter, r *http.Request) {
-	id, ok := extractID(r, "/v1/cases/", "/run")
+	id, ok := extractActionID(r, "/v1/cases/", "/run", ":run")
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
@@ -413,7 +526,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request, decision string) {
-	id, ok := extractID(r, "/v1/approvals/"+decision+"/", "")
+	id, ok := extractActionID(r, "/v1/approvals/", "/"+decision, ":"+decision)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_approval_id"})
 		return
@@ -447,7 +560,7 @@ func (s *Server) handleResolveApproval(w http.ResponseWriter, r *http.Request, d
 }
 
 func (s *Server) handleBuildReport(w http.ResponseWriter, r *http.Request) {
-	caseID, ok := extractID(r, "/v1/reports/", "/build")
+	caseID, ok := extractActionID(r, "/v1/reports/", "/build", ":build")
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
@@ -458,6 +571,49 @@ func (s *Server) handleBuildReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleListReports(w http.ResponseWriter, r *http.Request) {
+	reports, err := s.svc.ListReports(r.Context(), r.URL.Query().Get("case_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, reports)
+}
+
+func (s *Server) handleGetReport(w http.ResponseWriter, r *http.Request) {
+	reportID, ok := extractReportID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_report_id"})
+		return
+	}
+
+	report, err := s.svc.GetReport(r.Context(), reportID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleGetReportContent(w http.ResponseWriter, r *http.Request) {
+	reportID, ok := extractReportID(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_report_id"})
+		return
+	}
+
+	report, body, err := s.svc.GetReportContent(r.Context(), reportID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filepath.Base(report.Path)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
@@ -486,6 +642,12 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject tokens without jti - they cannot be properly revoked
+	if claims.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "token_cannot_be_revoked"})
+		return
+	}
+
 	if s.blacklist == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "blacklist_not_configured"})
 		return
@@ -504,28 +666,23 @@ func writeError(w http.ResponseWriter, err error) {
 	// Check for AppError
 	var appErr *apperrors.AppError
 	if errors.As(err, &appErr) {
-		status := http.StatusInternalServerError
-		switch {
-		case appErr.Code >= 1000 && appErr.Code < 2000:
-			status = http.StatusBadRequest
-		case appErr.Code >= 2000 && appErr.Code < 3000:
-			if appErr.Code == 2001 || appErr.Code == 2002 { // case not found
-				status = http.StatusNotFound
-			} else {
-				status = http.StatusBadRequest
-			}
-		case appErr.Code >= 3000 && appErr.Code < 4000:
-			if appErr.Code == 3001 { // approval not found
-				status = http.StatusNotFound
-			} else {
-				status = http.StatusBadRequest
-			}
-		case appErr.Code >= 4000 && appErr.Code < 5000:
+		status := http.StatusBadRequest
+		switch appErr.Code {
+		case apperrors.ErrCodeUnauthorized:
+			status = http.StatusUnauthorized
+		case apperrors.ErrCodeForbidden:
+			status = http.StatusForbidden
+		case apperrors.ErrCodeConflict:
+			status = http.StatusConflict
+		case apperrors.ErrCodeTimeout:
+			status = http.StatusGatewayTimeout
+		}
+		if appErr.Code == apperrors.ErrCodeCaseNotFound || appErr.Code == apperrors.ErrCodeApprovalNotFound || appErr.Code == apperrors.ErrCodeReportNotFound || appErr.Code == apperrors.ErrCodeReportContentMissing {
 			status = http.StatusNotFound
 		}
 		writeJSON(w, status, map[string]any{
 			"code":    appErr.Code,
-			"error":   appErr.Error(),
+			"error":   appErr.Message,
 			"message": appErr.Message,
 		})
 		return
@@ -533,7 +690,15 @@ func writeError(w http.ResponseWriter, err error) {
 
 	// Fallback for non-AppError
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "resource_not_found"})
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "resource_not_found", "message": "Resource not found"})
+		return
+	}
+	if errors.Is(err, store.ErrConcurrentModification) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "concurrent_modification", "message": "Concurrent modification detected"})
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeJSON(w, http.StatusGatewayTimeout, map[string]any{"error": "timeout", "message": "Request timed out"})
 		return
 	}
 	log.Printf("internal server error: %v", err)

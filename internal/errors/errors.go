@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-// Error codes for HAL-Proxy
+// Error codes for BridgeOS
 const (
 	// General errors (1000-1999)
 	ErrCodeGeneral      = 1000
@@ -17,21 +17,26 @@ const (
 	ErrCodeTimeout      = 1007
 
 	// Case errors (2000-2999)
+	ErrCodeCaseBase          = 2000
 	ErrCodeCaseNotFound      = 2001
 	ErrCodeCaseInvalidStatus = 2002
 	ErrCodeCaseAlreadyExists = 2003
 	ErrCodeCaseNotRunnable   = 2004
 
 	// Approval errors (3000-3999)
+	ErrCodeApprovalBase     = 3000
 	ErrCodeApprovalNotFound = 3001
 	ErrCodeApprovalInvalid  = 3002
 	ErrCodeApprovalExpired  = 3003
 
 	// Report errors (4000-4999)
-	ErrCodeReportNotFound   = 4001
-	ErrCodeReportGeneration = 4002
+	ErrCodeReportBase           = 4000
+	ErrCodeReportNotFound       = 4001
+	ErrCodeReportGeneration     = 4002
+	ErrCodeReportContentMissing = 4003
 
 	// Store errors (5000-5999)
+	ErrCodeStoreBase      = 5000
 	ErrCodeStoreInit      = 5001
 	ErrCodeStoreOperation = 5002
 	ErrCodeStoreNotFound  = 5003
@@ -85,6 +90,18 @@ var (
 	ErrInternal = New(ErrCodeInternal, "internal server error")
 )
 
+func ErrUnauthorized(reason string) *AppError {
+	return New(ErrCodeUnauthorized, fmt.Sprintf("unauthorized: %s", reason))
+}
+
+func ErrForbidden(reason string) *AppError {
+	return New(ErrCodeForbidden, fmt.Sprintf("forbidden: %s", reason))
+}
+
+func ErrConflict(reason string) *AppError {
+	return New(ErrCodeConflict, fmt.Sprintf("conflict: %s", reason))
+}
+
 // Case errors
 func ErrCaseNotFound(id string) *AppError {
 	return New(ErrCodeCaseNotFound, fmt.Sprintf("case not found: %s", id))
@@ -111,13 +128,21 @@ func ErrApprovalInvalid(id string, reason string) *AppError {
 	return New(ErrCodeApprovalInvalid, fmt.Sprintf("invalid approval %s: %s", id, reason))
 }
 
+func ErrApprovalExpired(id string) *AppError {
+	return New(ErrCodeApprovalExpired, fmt.Sprintf("approval expired: %s", id))
+}
+
 // Report errors
-func ErrReportNotFound(caseID string) *AppError {
-	return New(ErrCodeReportNotFound, fmt.Sprintf("report not found for case: %s", caseID))
+func ErrReportNotFound(reportID string) *AppError {
+	return New(ErrCodeReportNotFound, fmt.Sprintf("report not found: %s", reportID))
 }
 
 func ErrReportGeneration(err error) *AppError {
 	return Wrap(ErrCodeReportGeneration, "failed to generate report", err)
+}
+
+func ErrReportContentMissing(reportID string) *AppError {
+	return New(ErrCodeReportContentMissing, fmt.Sprintf("report content missing: %s", reportID))
 }
 
 // Store errors

@@ -1,4 +1,4 @@
-// CaseRecord represents a HAL-Proxy case record
+// CaseRecord represents a BridgeOS case record
 export interface CaseRecord {
   id: string
   title: string
@@ -86,10 +86,15 @@ export interface ApiResponse<T> {
   status?: number
 }
 
-// Pagination support
-export interface PaginatedResponse<T> {
-  data: T[]
+export interface CasesListResponse {
+  items: CaseRecord[]
+  next_cursor: string
+  has_more: boolean
+}
+
+export interface CaseEventsResponse {
+  items: EventEnvelope[]
   total: number
-  page: number
-  page_size: number
+  limit: number
+  offset: number
 }

@@ -22,6 +22,12 @@ func (tb *TokenBlacklist) Init(ctx context.Context) error {
 			revoked_at INTEGER NOT NULL
 		)
 	`)
+	if err != nil {
+		return err
+	}
+	_, err = tb.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_blacklist_expires_at ON token_blacklist(expires_at)
+	`)
 	return err
 }
 

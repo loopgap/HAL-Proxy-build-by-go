@@ -1,6 +1,6 @@
-# Contributing to HAL-Proxy
+# Contributing to BridgeOS
 
-Thank you for your interest in contributing to HAL-Proxy! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to BridgeOS! This document provides guidelines and instructions for contributing.
 
 ## 📋 Table of Contents
 
@@ -30,11 +30,11 @@ This project and everyone participating in it is governed by our [Code of Conduc
 # Fork the repository on GitHub
 
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/hal-proxy.git
-cd hal-proxy
+git clone https://github.com/YOUR_USERNAME/bridgeos.git
+cd bridgeos
 
 # Add upstream remote
-git remote add upstream https://github.com/your-org/hal-proxy.git
+git remote add upstream https://github.com/your-org/bridgeos.git
 ```
 
 ### Install Dependencies
@@ -194,4 +194,4 @@ Feel free to:
 - Join our community discussions
 - Contact the maintainers
 
-Thank you for contributing to HAL-Proxy! 🎉
+Thank you for contributing to BridgeOS!

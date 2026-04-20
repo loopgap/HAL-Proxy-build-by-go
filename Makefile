@@ -1,6 +1,6 @@
-# HAL-Proxy Makefile
+# BridgeOS Makefile
 
-.PHONY: all build test clean run hal hal-proxyd install docker-build docker-run fmt lint lint-check
+.PHONY: all build test clean run bridge bridgeosd install docker-build docker-run fmt lint lint-check
 .PHONY: frontend frontend-install frontend-build frontend-test frontend-lint
 .PHONY: cross-platform cross-platform-build ci ci-full help
 
@@ -13,8 +13,9 @@ GOMOD=$(GOCMD) mod
 BINARY_DIR=bin
 
 # Binaries
-HAL_BINARY=$(BINARY_DIR)/hal
-HAL_PROXYD_BINARY=$(BINARY_DIR)/hal-proxyd
+GO_PACKAGES=./cmd/... ./internal/...
+BRIDGE_BINARY=$(BINARY_DIR)/bridge
+BRIDGEOSD_BINARY=$(BINARY_DIR)/bridgeosd
 
 # Build flags
 LDFLAGS=-ldflags "-s -w"
@@ -27,43 +28,43 @@ GOARCH?=amd64
 all: test build
 
 # Build all binaries
-build: build-hal build-hal-proxyd
+build: build-bridge build-bridgeosd
 
 # Build hal CLI
-build-hal:
-	@echo "Building hal CLI..."
+build-bridge:
+	@echo "Building bridge CLI..."
 	@mkdir -p $(BINARY_DIR)
-	$(GOBUILD) $(LDFLAGS) -o $(HAL_BINARY) ./cmd/bridge
-	@echo "hal CLI built successfully!"
+	$(GOBUILD) $(LDFLAGS) -o $(BRIDGE_BINARY) ./cmd/bridge
+	@echo "bridge CLI built successfully!"
 
-# Build hal-proxyd daemon
-build-hal-proxyd:
-	@echo "Building hal-proxyd daemon..."
+# Build BridgeOS daemon
+build-bridgeosd:
+	@echo "Building bridgeosd daemon..."
 	@mkdir -p $(BINARY_DIR)
-	$(GOBUILD) $(LDFLAGS) -o $(HAL_PROXYD_BINARY) ./cmd/bridgeosd
-	@echo "HAL-Proxy daemon built successfully!"
+	$(GOBUILD) $(LDFLAGS) -o $(BRIDGEOSD_BINARY) ./cmd/bridgeosd
+	@echo "BridgeOS daemon built successfully!"
 
 # Run tests
 test:
 	@echo "Running tests..."
-	$(GOTEST) -v -race -cover ./...
+	$(GOTEST) -v -race -cover $(GO_PACKAGES)
 	@echo "All tests passed!"
 
 # Run tests with coverage report
 test-coverage:
 	@echo "Running tests with coverage..."
-	$(GOTEST) -v -race -coverprofile=coverage.out ./...
+	$(GOTEST) -v -race -coverprofile=coverage.out $(GO_PACKAGES)
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
 # Run specific package tests
 test-unit:
 	@echo "Running unit tests..."
-	$(GOTEST) -v -short ./...
+	$(GOTEST) -v -short $(GO_PACKAGES)
 
 test-integration:
 	@echo "Running integration tests..."
-	$(GOTEST) -v -tags=integration ./...
+	$(GOTEST) -v -tags=integration $(GO_PACKAGES)
 
 # Clean build artifacts
 clean:
@@ -73,19 +74,19 @@ clean:
 	rm -f coverage.out coverage.html
 	@echo "Cleaned!"
 
-# Run hal CLI
-hal: build-hal
-	@echo "Running hal CLI..."
-	./$(HAL_BINARY) $(ARGS)
+# Run bridge CLI
+bridge: build-bridge
+	@echo "Running bridge CLI..."
+	./$(BRIDGE_BINARY) $(ARGS)
 
-# Run hal-proxyd daemon
-hal-proxyd: build-hal-proxyd
-	@echo "Running HAL-Proxy daemon..."
-	./$(HAL_PROXYD_BINARY) $(ARGS)
+# Run bridgeosd daemon
+bridgeosd: build-bridgeosd
+	@echo "Running BridgeOS daemon..."
+	./$(BRIDGEOSD_BINARY) $(ARGS)
 
 # Development server
 run-hal-proxyd:
-	HAL_PROXY_DB=./data/hal-proxy.db HAL_PROXY_ADDR=:8080 $(GOCMD) run ./cmd/bridgeosd
+	BRIDGEOS_DB=./data/bridgeos.db BRIDGEOS_ADDR=:8080 $(GOCMD) run ./cmd/bridgeosd
 
 # Install dependencies
 install:
@@ -98,21 +99,20 @@ tidy:
 
 # Format code
 fmt:
-	$(GOCMD) fmt ./...
+	$(GOCMD) fmt $(GO_PACKAGES)
 
 # Lint code
 lint:
-	golangci-lint run ./...
+	golangci-lint run $(GO_PACKAGES)
 
 # Run linter if available, otherwise skip
 lint-check:
-	@which golangci-lint > /dev/null && golangci-lint run ./... || echo "golangci-lint not found, skipping..."
+	@which golangci-lint > /dev/null && golangci-lint run $(GO_PACKAGES) || echo "golangci-lint not found, skipping..."
 
 # Build Docker images
 docker-build:
 	@echo "Building Docker images..."
-	docker build -t hal-proxy/hal-proxyd:latest -f Dockerfile.backend .
-	docker build -t hal-proxy/hal:latest -f Dockerfile.cli .
+	docker build -t bridgeos/bridgeosd:latest -f Dockerfile.backend .
 
 # Run with Docker Compose
 docker-run:
@@ -131,20 +131,20 @@ docs-api:
 release: test clean build
 	@echo "Creating release..."
 	cd $(BINARY_DIR) && \
-	tar -czvf hal-proxy-$(shell date +%Y%m%d).tar.gz hal hal-proxyd
+	tar -czvf bridgeos-$(shell date +%Y%m%d).tar.gz bridge bridgeosd
 
 # Show help
 help:
-	@echo "HAL-Proxy Makefile"
+	@echo "BridgeOS Makefile"
 	@echo ""
 	@echo "Usage:"
 	@echo "  make build           - Build all binaries"
-	@echo "  make build-hal       - Build hal CLI"
-	@echo "  make build-hal-proxyd - Build hal-proxyd daemon"
+	@echo "  make build-bridge       - Build bridge CLI"
+	@echo "  make build-bridgeosd - Build bridgeosd daemon"
 	@echo "  make test            - Run all tests"
 	@echo "  make test-coverage   - Run tests with coverage report"
 	@echo "  make clean          - Clean build artifacts"
-	@echo "  make run-hal-proxyd  - Run hal-proxyd daemon"
+	@echo "  make run-hal-proxyd  - Run bridgeosd daemon"
 	@echo "  make docker-build    - Build Docker images"
 	@echo "  make docker-run      - Run with Docker Compose"
 	@echo "  make fmt             - Format code"
@@ -203,8 +203,8 @@ cross-platform: cross-platform-build
 cross-platform-build:
 	@echo "Building for $(GOOS)/$(GOARCH)..."
 	mkdir -p $(BINARY_DIR)
-	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/hal-$(GOOS)-$(GOARCH) ./cmd/bridge
-	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/hal-proxyd-$(GOOS)-$(GOARCH) ./cmd/bridgeosd
+	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/bridge-$(GOOS)-$(GOARCH) ./cmd/bridge
+	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/bridgeosd-$(GOOS)-$(GOARCH) ./cmd/bridgeosd
 	@echo "Built for $(GOOS)/$(GOARCH)"
 
 build-all-platforms:

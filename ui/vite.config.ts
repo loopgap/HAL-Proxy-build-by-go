@@ -18,6 +18,16 @@ export default defineConfig({
       },
     },
   },
+  preview: {
+    port: 4173,
+    // CORS headers for production preview
+    // Set VITE_API_BASE_URL env var for cross-origin API calls in production
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Request-ID, X-Request-Time',
+    },
+  },
   build: {
     outDir: 'dist',
     sourcemap: true,

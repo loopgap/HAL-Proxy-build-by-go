@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"hal-proxy/internal/logging"
+	"bridgeos/internal/logging"
 )
 
 var defaultLogger = logging.Default()

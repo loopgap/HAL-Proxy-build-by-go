@@ -1,7 +1,7 @@
 package dto
 
 import (
-	"hal-proxy/internal/domain"
+	"bridgeos/internal/domain"
 	"time"
 )
 

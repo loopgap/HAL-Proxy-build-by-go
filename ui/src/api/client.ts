@@ -1,5 +1,14 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, InternalAxiosRequestConfig, AxiosError } from 'axios'
-import type { ApiResponse, CaseRecord, Approval, ReportSummary, RunResult, CaseSpec, EventEnvelope } from '@/types'
+import type {
+  ApiResponse,
+  CaseRecord,
+  Approval,
+  ReportSummary,
+  RunResult,
+  CaseSpec,
+  CasesListResponse,
+  CaseEventsResponse,
+} from '@/types'
 
 export interface RequestConfig extends AxiosRequestConfig {
   retries?: number
@@ -74,8 +83,8 @@ function handleError(error: unknown): ApiResponse<never> {
 }
 
 // Case APIs
-export async function getCases(): Promise<ApiResponse<CaseRecord[]>> {
-  try { const response = await api.get('/cases'); return handleResponse<CaseRecord[]>(response) }
+export async function getCases(): Promise<ApiResponse<CasesListResponse>> {
+  try { const response = await api.get('/cases'); return handleResponse<CasesListResponse>(response) }
   catch (error) { return handleError(error) }
 }
 
@@ -90,12 +99,12 @@ export async function createCase(spec: CaseSpec): Promise<ApiResponse<CaseRecord
 }
 
 export async function runCase(id: string): Promise<ApiResponse<RunResult>> {
-  try { const response = await api.post('/cases/' + id + ':run'); return handleResponse<RunResult>(response) }
+  try { const response = await api.post('/cases/' + id + '/run'); return handleResponse<RunResult>(response) }
   catch (error) { return handleError(error) }
 }
 
-export async function getCaseEvents(id: string): Promise<ApiResponse<EventEnvelope[]>> {
-  try { const response = await api.get('/cases/' + id + '/events'); return handleResponse<EventEnvelope[]>(response) }
+export async function getCaseEvents(id: string): Promise<ApiResponse<CaseEventsResponse>> {
+  try { const response = await api.get('/cases/' + id + '/events'); return handleResponse<CaseEventsResponse>(response) }
   catch (error) { return handleError(error) }
 }
 
@@ -106,55 +115,35 @@ export async function getApprovals(caseId?: string): Promise<ApiResponse<Approva
 }
 
 export async function approveApproval(id: string): Promise<ApiResponse<Approval>> {
-  try { const response = await api.post('/approvals/' + id + ':approve'); return handleResponse<Approval>(response) }
+  try { const response = await api.post('/approvals/' + id + '/approve'); return handleResponse<Approval>(response) }
   catch (error) { return handleError(error) }
 }
 
 export async function rejectApproval(id: string): Promise<ApiResponse<Approval>> {
-  try { const response = await api.post('/approvals/' + id + ':reject'); return handleResponse<Approval>(response) }
+  try { const response = await api.post('/approvals/' + id + '/reject'); return handleResponse<Approval>(response) }
   catch (error) { return handleError(error) }
-}
-
-// Report APIs
-const REPORTS_STORAGE_KEY = 'hal_proxy_reports'
-
-function getStoredReports(): ReportSummary[] {
-  try {
-    const stored = localStorage.getItem(REPORTS_STORAGE_KEY)
-    return stored ? JSON.parse(stored) : []
-  } catch (error) {
-    console.warn("Failed to get stored reports:", error)
-    return []
-  }
-}
-
-function saveReport(report: ReportSummary): void {
-  try {
-    const reports = getStoredReports()
-    const existing = reports.findIndex((r) => r.id === report.id)
-    if (existing >= 0) {
-      reports[existing] = report
-    } else {
-      reports.unshift(report)
-    }
-    localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports))
-  } catch (error) {
-    console.warn("Failed to save report to localStorage:", error)
-  }
 }
 
 export async function getReports(): Promise<ApiResponse<ReportSummary[]>> {
-  try { return { data: getStoredReports(), error: null } }
+  try { const response = await api.get('/reports'); return handleResponse<ReportSummary[]>(response) }
   catch (error) { return handleError(error) }
 }
 
-export async function buildReport(caseId: string): Promise<ApiResponse<ReportSummary>> {
+export async function getReport(id: string): Promise<ApiResponse<ReportSummary>> {
+  try { const response = await api.get('/reports/' + id); return handleResponse<ReportSummary>(response) }
+  catch (error) { return handleError(error) }
+}
+
+export async function getReportContent(id: string): Promise<ApiResponse<string>> {
   try {
-    const response = await api.post('/reports/' + caseId + ':build')
-    const report = response.data as ReportSummary
-    saveReport(report)
-    return handleResponse<ReportSummary>(response)
+    const response = await api.get('/reports/' + id + '/content', { responseType: 'text' })
+    return handleResponse<string>(response)
   } catch (error) { return handleError(error) }
+}
+
+export async function buildReport(caseId: string): Promise<ApiResponse<ReportSummary>> {
+  try { const response = await api.post('/reports/' + caseId + '/build'); return handleResponse<ReportSummary>(response) }
+  catch (error) { return handleError(error) }
 }
 
 export { api }

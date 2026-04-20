@@ -7,86 +7,81 @@ import { Card, CardContent, CardHeader } from '@/components/ui/Card'
 export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { login } = useAuthStore()
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
+  const { login, logout } = useAuthStore()
+  const [token, setToken] = useState('')
   const [error, setError] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
 
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/'
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleUseToken = (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    setIsLoading(true)
 
-    try {
-      const response = await fetch('/v1/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      })
-
-      if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || 'Login failed')
-      }
-
-      const data = await response.json()
-      login({ id: data.user_id, name: username, email: `${username}@example.com` }, data.token)
-      navigate(from, { replace: true })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed')
-    } finally {
-      setIsLoading(false)
+    const trimmed = token.trim()
+    if (!trimmed) {
+      setError('Enter a Bearer token or continue in local trusted mode.')
+      return
     }
+
+    login(
+      { id: 'api-token', name: 'API Token', email: 'token@bridgeos.local' },
+      trimmed
+    )
+    navigate(from, { replace: true })
+  }
+
+  const handleContinueTrusted = () => {
+    setError('')
+    logout()
+    navigate(from, { replace: true })
   }
 
   return (
     <div className='min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4'>
       <Card className='w-full max-w-md'>
-        <CardHeader title='HAL-Proxy' subtitle='Enter your credentials to access the system' />
+        <CardHeader title='BridgeOS Access' subtitle='Use local trusted mode on loopback, or paste an existing Bearer token.' />
         <CardContent>
-          <form onSubmit={handleSubmit} className='space-y-4'>
+          <div className='space-y-4'>
             {error && (
               <div className='bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm p-3 rounded-md'>
                 {error}
               </div>
             )}
-            <div className='space-y-2'>
-              <label htmlFor='username' className='text-sm font-medium text-gray-700 dark:text-gray-300'>
-                Username
-              </label>
-              <input
-                id='username'
-                type='text'
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-800 dark:text-white'
-                placeholder='Enter username'
-                required
-              />
+            <div className='rounded-md bg-blue-50 dark:bg-blue-900/20 p-4 text-sm text-blue-900 dark:text-blue-100'>
+              <p className='font-medium'>Recommended for local development</p>
+              <p className='mt-1'>
+                Start the daemon with <code>BRIDGEOS_LOCAL_TRUSTED=true</code> and access BridgeOS from loopback.
+                No username/password login API is implemented in this build.
+              </p>
             </div>
-            <div className='space-y-2'>
-              <label htmlFor='password' className='text-sm font-medium text-gray-700 dark:text-gray-300'>
-                Password
-              </label>
-              <input
-                id='password'
-                type='password'
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-800 dark:text-white'
-                placeholder='Enter password'
-                required
-              />
-            </div>
-            <Button type='submit' className='w-full' disabled={isLoading}>
-              {isLoading ? 'Signing in...' : 'Sign in'}
+
+            <Button type='button' className='w-full' onClick={handleContinueTrusted}>
+              Continue In Local Trusted Mode
             </Button>
-          </form>
-          <div className='mt-4 text-center text-sm text-gray-500 dark:text-gray-400'>
-            <p>Development mode: Use any credentials</p>
+
+            <form onSubmit={handleUseToken} className='space-y-3 border-t border-gray-200 dark:border-gray-700 pt-4'>
+              <div className='space-y-2'>
+                <label htmlFor='token' className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                  Existing Bearer Token
+                </label>
+                <textarea
+                  id='token'
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  className='w-full min-h-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-800 dark:text-white'
+                  placeholder='Paste a JWT or API bearer token'
+                />
+              </div>
+              <Button type='submit' variant='outline' className='w-full'>
+                Use Bearer Token
+              </Button>
+            </form>
+
+            <div className='text-sm text-gray-500 dark:text-gray-400 space-y-1'>
+              <p>Supported access modes:</p>
+              <p>1. Loopback + local trusted mode</p>
+              <p>2. Existing Bearer token or API key</p>
+            </div>
           </div>
         </CardContent>
       </Card>

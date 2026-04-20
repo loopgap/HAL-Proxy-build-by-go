@@ -117,6 +117,7 @@ type Approval struct {
 	Reason       string         `json:"reason,omitempty"`
 	DecidedBy    string         `json:"decided_by,omitempty"`
 	DecidedAt    *time.Time     `json:"decided_at,omitempty"`
+	Version      int            `json:"version"` // Optimistic locking
 	CreatedAt    time.Time      `json:"created_at"`
 }
 
@@ -134,6 +135,7 @@ type DeviceDescriptor struct {
 	Name         string   `json:"name"`
 	Capabilities []string `json:"capabilities"`
 	SupportLevel string   `json:"support_level"`
+	Source       string   `json:"source"`
 }
 
 type SessionRecord struct {
@@ -141,6 +143,7 @@ type SessionRecord struct {
 	DeviceID  string    `json:"device_id"`
 	Status    string    `json:"status"`
 	Owner     string    `json:"owner"`
+	Source    string    `json:"source"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

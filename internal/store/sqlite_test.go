@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"hal-proxy/internal/domain"
+	"bridgeos/internal/domain"
 )
 
 func setupTestDB(t *testing.T) (*SQLiteRepository, func()) {
@@ -378,6 +378,7 @@ func TestUpdateApproval(t *testing.T) {
 	approval.DecidedBy = "test-user"
 	approval.DecidedAt = &decidedAt
 	approval.Reason = "Test approval"
+	approval.Version++
 
 	err = repo.UpdateApproval(ctx, approval)
 	if err != nil {
@@ -518,6 +519,141 @@ func TestGetLatestReportNotFound(t *testing.T) {
 
 	if err != ErrNotFound {
 		t.Errorf("Expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestListReports(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	caseA := domain.CaseRecord{
+		ID:          "case-reports-a",
+		OwnerID:     "owner-a",
+		Title:       "Case A",
+		Status:      domain.CaseStatusCompleted,
+		Spec:        domain.CaseSpec{Title: "Case A"},
+		NextCommand: 0,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	caseB := domain.CaseRecord{
+		ID:          "case-reports-b",
+		OwnerID:     "owner-b",
+		Title:       "Case B",
+		Status:      domain.CaseStatusCompleted,
+		Spec:        domain.CaseSpec{Title: "Case B"},
+		NextCommand: 0,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := repo.CreateCase(ctx, caseA); err != nil {
+		t.Fatalf("Failed to create case A: %v", err)
+	}
+	if err := repo.CreateCase(ctx, caseB); err != nil {
+		t.Fatalf("Failed to create case B: %v", err)
+	}
+
+	reports := []domain.ReportSummary{
+		{
+			ID:           "report-old",
+			CaseID:       caseA.ID,
+			Path:         "/artifacts/old.md",
+			CommandCount: 1,
+			EventCount:   2,
+			CreatedAt:    now.Add(-2 * time.Hour),
+		},
+		{
+			ID:           "report-new",
+			CaseID:       caseA.ID,
+			Path:         "/artifacts/new.md",
+			CommandCount: 3,
+			EventCount:   4,
+			CreatedAt:    now.Add(-1 * time.Hour),
+		},
+		{
+			ID:           "report-other",
+			CaseID:       caseB.ID,
+			Path:         "/artifacts/other.md",
+			CommandCount: 5,
+			EventCount:   6,
+			CreatedAt:    now,
+		},
+	}
+	for _, report := range reports {
+		if err := repo.CreateReport(ctx, report); err != nil {
+			t.Fatalf("Failed to create report %s: %v", report.ID, err)
+		}
+	}
+
+	allReports, err := repo.ListReports(ctx, "")
+	if err != nil {
+		t.Fatalf("Failed to list all reports: %v", err)
+	}
+	if len(allReports) != 3 {
+		t.Fatalf("Expected 3 reports, got %d", len(allReports))
+	}
+	if allReports[0].ID != "report-other" || allReports[1].ID != "report-new" || allReports[2].ID != "report-old" {
+		t.Fatalf("Reports not sorted by created_at desc: %+v", allReports)
+	}
+
+	caseReports, err := repo.ListReports(ctx, caseA.ID)
+	if err != nil {
+		t.Fatalf("Failed to list case reports: %v", err)
+	}
+	if len(caseReports) != 2 {
+		t.Fatalf("Expected 2 reports for case A, got %d", len(caseReports))
+	}
+	if caseReports[0].ID != "report-new" || caseReports[1].ID != "report-old" {
+		t.Fatalf("Filtered reports not sorted desc: %+v", caseReports)
+	}
+}
+
+func TestGetReport(t *testing.T) {
+	repo, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	caseRecord := domain.CaseRecord{
+		ID:          "case-report-by-id",
+		OwnerID:     "owner-a",
+		Title:       "Case Report ID",
+		Status:      domain.CaseStatusCompleted,
+		Spec:        domain.CaseSpec{Title: "Case Report ID"},
+		NextCommand: 0,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := repo.CreateCase(ctx, caseRecord); err != nil {
+		t.Fatalf("Failed to create case: %v", err)
+	}
+
+	report := domain.ReportSummary{
+		ID:           "report-by-id",
+		CaseID:       caseRecord.ID,
+		Path:         "/artifacts/by-id.md",
+		CommandCount: 2,
+		EventCount:   3,
+		CreatedAt:    now,
+	}
+	if err := repo.CreateReport(ctx, report); err != nil {
+		t.Fatalf("Failed to create report: %v", err)
+	}
+
+	retrieved, err := repo.GetReport(ctx, report.ID)
+	if err != nil {
+		t.Fatalf("Failed to get report by id: %v", err)
+	}
+	if retrieved.ID != report.ID {
+		t.Fatalf("Expected report id %s, got %s", report.ID, retrieved.ID)
+	}
+
+	if _, err := repo.GetReport(ctx, "missing-report"); err != ErrNotFound {
+		t.Fatalf("Expected ErrNotFound for missing report, got %v", err)
 	}
 }
 

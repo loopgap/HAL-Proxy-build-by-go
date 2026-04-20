@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"hal-proxy/internal/domain"
+	"bridgeos/internal/domain"
 )
 
 func TestNormalizeRisk(t *testing.T) {

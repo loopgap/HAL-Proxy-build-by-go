@@ -13,14 +13,15 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/trace"
 
-	"hal-proxy/internal/api"
-	"hal-proxy/internal/config"
-	"hal-proxy/internal/core"
-	"hal-proxy/internal/store"
+	"bridgeos/internal/api"
+	"bridgeos/internal/config"
+	"bridgeos/internal/core"
+	"bridgeos/internal/store"
+	"bridgeos/internal/version"
 )
 
 func main() {
-	cfg, err := config.Load(os.Getenv("HAL_PROXY_CONFIG"))
+	cfg, err := config.Load(config.ConfigPathFromEnv())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -48,7 +49,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := api.NewServer(svc, repo.DB(), repo.Blacklist, cfg.Auth.JWTSecret, cfg.Auth.JWTExpiryHours, cfg.Auth.JWTIssuer, cfg.Auth.TrustedProxies)
+	server := api.NewServer(
+		svc,
+		repo.DB(),
+		repo.Blacklist,
+		cfg.Auth.JWTSecret,
+		cfg.Auth.JWTExpiryHours,
+		cfg.Auth.JWTIssuer,
+		cfg.Auth.TrustedProxies,
+		cfg.Auth.LocalTrusted,
+		cfg.Auth.LocalTrustedUserID,
+		cfg.Auth.LocalTrustedRoles,
+	)
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Address,
@@ -74,7 +86,7 @@ func main() {
 		}
 	}()
 
-	log.Printf("hal-proxyd listening on %s", cfg.Server.Address)
+	log.Printf("%s %s listening on %s", version.AppName, version.Version, cfg.Server.Address)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server error: %v", err)
 	}
