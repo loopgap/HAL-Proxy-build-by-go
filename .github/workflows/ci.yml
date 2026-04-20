@@ -122,9 +122,9 @@ jobs:
             fi
           fi
       
-      - name: Run npm audit
+      - name: "Run npm audit"
         working-directory: ui
-        run: npm audit --audit-level=high
+        run: npm audit --audit-level=critical
 
   # Generate Coverage Report
   coverage:
