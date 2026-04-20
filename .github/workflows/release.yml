@@ -12,6 +12,8 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout code
@@ -43,9 +45,10 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-windows-amd64.exe ./cmd/bridgeosd
       
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: release/*
           generate_release_notes: true
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
