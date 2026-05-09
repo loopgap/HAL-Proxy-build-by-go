@@ -1,13 +1,20 @@
 import { CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react'
+import type { CaseStatus, ApprovalStatus, RiskClass } from '@/types'
 
-type CaseStatus = 'completed' | 'running' | 'paused' | 'rejected' | 'ready' | 'draft'
-type ApprovalStatus = 'pending' | 'approved' | 'rejected'
-type RiskClass = 'observe' | 'mutate' | 'destructive' | 'exclusive'
+type CaseStatusString = CaseStatus | string
+type ApprovalStatusString = ApprovalStatus | string
 
 interface StatusBadgeProps {
-  status: string
-  variant?: 'case' | 'approval'
+  status: CaseStatusString
+  variant?: 'case'
 }
+
+interface ApprovalBadgeProps {
+  status: ApprovalStatusString
+  variant: 'approval'
+}
+
+type Props = StatusBadgeProps | ApprovalBadgeProps
 
 const caseStatusStyles: Record<CaseStatus, string> = {
   completed: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
@@ -37,12 +44,20 @@ const riskClassStyles: Record<RiskClass, string> = {
   exclusive: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
 }
 
-export function StatusBadge({ status, variant = 'case' }: StatusBadgeProps) {
-  if (variant === 'approval') {
-    const styles = approvalStatusStyles as Record<string, string>
-    const icons = approvalStatusIcons as Record<string, typeof Clock>
-    const Icon = icons[status] || Clock
-    const style = styles[status] || styles.pending
+function isCaseStatus(status: string): status is CaseStatus {
+  return status in caseStatusStyles
+}
+
+function isApprovalStatus(status: string): status is ApprovalStatus {
+  return status in approvalStatusStyles
+}
+
+export function StatusBadge(props: Props) {
+  if (props.variant === 'approval') {
+    const { status } = props
+    const safeStatus: ApprovalStatus = isApprovalStatus(status) ? status : 'pending'
+    const style = approvalStatusStyles[safeStatus]
+    const Icon = approvalStatusIcons[safeStatus]
 
     return (
       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${style}`}>
@@ -52,8 +67,9 @@ export function StatusBadge({ status, variant = 'case' }: StatusBadgeProps) {
     )
   }
 
-  const styles = caseStatusStyles as Record<string, string>
-  const style = styles[status] || styles.draft
+  const { status } = props
+  const safeStatus: CaseStatus = isCaseStatus(status) ? status : 'draft'
+  const style = caseStatusStyles[safeStatus]
 
   return (
     <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${style}`}>
@@ -63,12 +79,16 @@ export function StatusBadge({ status, variant = 'case' }: StatusBadgeProps) {
 }
 
 interface RiskBadgeProps {
-  riskClass: string
+  riskClass: RiskClass | string
+}
+
+function isRiskClass(value: string): value is RiskClass {
+  return value in riskClassStyles
 }
 
 export function RiskBadge({ riskClass }: RiskBadgeProps) {
-  const styles = riskClassStyles as Record<string, string>
-  const style = styles[riskClass] || styles.observe
+  const safeRiskClass: RiskClass = isRiskClass(riskClass) ? riskClass : 'observe'
+  const style = riskClassStyles[safeRiskClass]
 
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${style}`}>

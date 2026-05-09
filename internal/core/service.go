@@ -404,7 +404,7 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 	return RunResult{Case: c, Status: "completed"}, nil
 }
 
-func (s *Service) BuildReport(ctx context.Context, caseID string) (domain.ReportSummary, error) {
+func (s *Service) BuildReport(ctx context.Context, caseID string, ownerID string) (domain.ReportSummary, error) {
 	ctx, span := s.tracer.Start(ctx, "service.build_report")
 	defer span.End()
 
@@ -423,6 +423,7 @@ func (s *Service) BuildReport(ctx context.Context, caseID string) (domain.Report
 	rep := domain.ReportSummary{
 		ID:           newID("report"),
 		CaseID:       caseID,
+		OwnerID:      ownerID,
 		Path:         filepath.Join(s.artifactsDir, fmt.Sprintf("%s-report.md", caseID)),
 		CommandCount: len(c.Spec.Commands),
 		EventCount:   len(events),
@@ -448,11 +449,11 @@ func (s *Service) BuildReport(ctx context.Context, caseID string) (domain.Report
 	return rep, nil
 }
 
-func (s *Service) ListReports(ctx context.Context, caseID string) ([]domain.ReportSummary, error) {
+func (s *Service) ListReports(ctx context.Context, caseID string, ownerID string) ([]domain.ReportSummary, error) {
 	ctx, span := s.tracer.Start(ctx, "service.list_reports")
 	defer span.End()
 
-	return s.repo.ListReports(ctx, caseID)
+	return s.repo.ListReports(ctx, caseID, ownerID)
 }
 
 func (s *Service) GetReport(ctx context.Context, reportID string) (domain.ReportSummary, error) {

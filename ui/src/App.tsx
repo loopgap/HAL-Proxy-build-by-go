@@ -1,9 +1,9 @@
-import { Suspense, lazy } from 'react'
+import { lazy } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
-import { ErrorBoundary } from './components/ui/ErrorBoundary'
-import { LoadingSpinner } from './components/ui/LoadingSpinner'
+import { RouteErrorBoundary } from './components/ui/RouteErrorBoundary'
 import { Breadcrumbs, useBreadcrumbs } from './components/ui/Breadcrumbs'
+import { AuthGuard } from './guards/AuthGuard'
 import NotFoundPage from './pages/NotFound'
 import Login from './pages/Login'
 
@@ -13,14 +13,6 @@ const CaseList = lazy(() => import('./pages/CaseList'))
 const CaseDetail = lazy(() => import('./pages/CaseDetail'))
 const ApprovalList = lazy(() => import('./pages/ApprovalList'))
 const ReportList = lazy(() => import('./pages/ReportList'))
-
-function PageLoader() {
-  return (
-    <div className='flex items-center justify-center h-64'>
-      <LoadingSpinner size='lg' label='Loading page...' />
-    </div>
-  )
-}
 
 function PageWrapper({ children }: { children: React.ReactNode }) {
   const breadcrumbs = useBreadcrumbs()
@@ -36,19 +28,60 @@ function App() {
   return (
     <Layout>
       <PageWrapper>
-        <ErrorBoundary>
-          <Suspense fallback={<PageLoader />}>
-            <Routes>
-              <Route path='/login' element={<Login />} />
-              <Route path='/' element={<Dashboard />} />
-              <Route path='/cases' element={<CaseList />} />
-              <Route path='/cases/:id' element={<CaseDetail />} />
-              <Route path='/approvals' element={<ApprovalList />} />
-              <Route path='/reports' element={<ReportList />} />
-              <Route path='*' element={<NotFoundPage />} />
-            </Routes>
-          </Suspense>
-        </ErrorBoundary>
+        <Routes>
+          <Route path='/login' element={<Login />} />
+          <Route
+            path='/'
+            element={
+              <AuthGuard>
+                <RouteErrorBoundary>
+                  <Dashboard />
+                </RouteErrorBoundary>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path='/cases'
+            element={
+              <AuthGuard>
+                <RouteErrorBoundary>
+                  <CaseList />
+                </RouteErrorBoundary>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path='/cases/:id'
+            element={
+              <AuthGuard>
+                <RouteErrorBoundary>
+                  <CaseDetail />
+                </RouteErrorBoundary>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path='/approvals'
+            element={
+              <AuthGuard>
+                <RouteErrorBoundary>
+                  <ApprovalList />
+                </RouteErrorBoundary>
+              </AuthGuard>
+            }
+          />
+          <Route
+            path='/reports'
+            element={
+              <AuthGuard>
+                <RouteErrorBoundary>
+                  <ReportList />
+                </RouteErrorBoundary>
+              </AuthGuard>
+            }
+          />
+          <Route path='*' element={<NotFoundPage />} />
+        </Routes>
       </PageWrapper>
     </Layout>
   )

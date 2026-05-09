@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"bridgeos/internal/domain"
@@ -109,6 +110,7 @@ func (r *SQLiteRepository) Init(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS reports (
 			id TEXT PRIMARY KEY,
 			case_id TEXT NOT NULL,
+			owner_id TEXT NOT NULL DEFAULT '',
 			path TEXT NOT NULL,
 			command_count INTEGER NOT NULL,
 			event_count INTEGER NOT NULL,
@@ -134,6 +136,11 @@ func (r *SQLiteRepository) Init(ctx context.Context) error {
 	// Migration: add version column to approvals if upgrading from older schema
 	if err := r.migrateAddApprovalVersionColumn(ctx); err != nil {
 		return fmt.Errorf("migration add approval version: %w", err)
+	}
+
+	// Migration: populate owner_id for existing reports
+	if err := r.migrateReportsOwnerID(ctx); err != nil {
+		return fmt.Errorf("migration reports owner_id: %w", err)
 	}
 
 	return nil
@@ -242,6 +249,46 @@ func (r *SQLiteRepository) migrateAddApprovalVersionColumn(ctx context.Context) 
 		}
 	}
 	return nil
+}
+
+// migrateReportsOwnerID populates owner_id for existing reports by joining with cases table
+func (r *SQLiteRepository) migrateReportsOwnerID(ctx context.Context) error {
+	// Check if owner_id column exists in reports table
+	rows, err := r.db.QueryContext(ctx, `PRAGMA table_info(reports)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasOwnerID := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dflt_value interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk); err != nil {
+			return err
+		}
+		if name == "owner_id" {
+			hasOwnerID = true
+			break
+		}
+	}
+
+	if !hasOwnerID {
+		return nil
+	}
+
+	// Populate owner_id for reports that have empty owner_id
+	_, err = r.db.ExecContext(ctx, `
+		UPDATE reports
+		SET owner_id = (
+			SELECT c.owner_id FROM cases c WHERE c.id = reports.case_id
+		)
+		WHERE reports.owner_id = ''`)
+	return err
 }
 
 func (r *SQLiteRepository) CreateCase(ctx context.Context, c domain.CaseRecord) error {
@@ -615,9 +662,9 @@ func (r *SQLiteRepository) UpdateApproval(ctx context.Context, a domain.Approval
 func (r *SQLiteRepository) CreateReport(ctx context.Context, rep domain.ReportSummary) error {
 	_, err := r.db.ExecContext(
 		ctx,
-		`INSERT INTO reports (id, case_id, path, command_count, event_count, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		rep.ID, rep.CaseID, rep.Path, rep.CommandCount, rep.EventCount, rep.CreatedAt.Format(timestampFormat),
+		`INSERT INTO reports (id, case_id, owner_id, path, command_count, event_count, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		rep.ID, rep.CaseID, rep.OwnerID, rep.Path, rep.CommandCount, rep.EventCount, rep.CreatedAt.Format(timestampFormat),
 	)
 	if err != nil {
 		return fmt.Errorf("insert report: %w", err)
@@ -625,12 +672,22 @@ func (r *SQLiteRepository) CreateReport(ctx context.Context, rep domain.ReportSu
 	return nil
 }
 
-func (r *SQLiteRepository) ListReports(ctx context.Context, caseID string) ([]domain.ReportSummary, error) {
-	query := `SELECT id, case_id, path, command_count, event_count, created_at FROM reports`
+func (r *SQLiteRepository) ListReports(ctx context.Context, caseID string, ownerID string) ([]domain.ReportSummary, error) {
+	query := `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports`
 	args := []any{}
+
+	conditions := []string{}
 	if caseID != "" {
-		query += ` WHERE case_id = ?`
+		conditions = append(conditions, `case_id = ?`)
 		args = append(args, caseID)
+	}
+	if ownerID != "" {
+		conditions = append(conditions, `owner_id = ?`)
+		args = append(args, ownerID)
+	}
+
+	if len(conditions) > 0 {
+		query += ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
 	query += ` ORDER BY created_at DESC`
 
@@ -653,12 +710,12 @@ func (r *SQLiteRepository) ListReports(ctx context.Context, caseID string) ([]do
 }
 
 func (r *SQLiteRepository) GetReport(ctx context.Context, id string) (domain.ReportSummary, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, path, command_count, event_count, created_at FROM reports WHERE id = ?`, id)
+	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports WHERE id = ?`, id)
 	return scanReport(row)
 }
 
 func (r *SQLiteRepository) GetLatestReport(ctx context.Context, caseID string) (domain.ReportSummary, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, path, command_count, event_count, created_at FROM reports WHERE case_id = ? ORDER BY created_at DESC LIMIT 1`, caseID)
+	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports WHERE case_id = ? ORDER BY created_at DESC LIMIT 1`, caseID)
 	return scanReport(row)
 }
 
@@ -713,17 +770,20 @@ func scanEvent(s scanner) (domain.EventEnvelope, error) {
 func scanReport(s scanner) (domain.ReportSummary, error) {
 	var rep domain.ReportSummary
 	var createdAt string
-	if err := s.Scan(&rep.ID, &rep.CaseID, &rep.Path, &rep.CommandCount, &rep.EventCount, &createdAt); err != nil {
+
+	err := s.Scan(&rep.ID, &rep.CaseID, &rep.OwnerID, &rep.Path, &rep.CommandCount, &rep.EventCount, &createdAt)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.ReportSummary{}, ErrNotFound
 		}
 		return domain.ReportSummary{}, fmt.Errorf("scan report: %w", err)
 	}
-	var err error
+
 	rep.CreatedAt, err = time.Parse(timestampFormat, createdAt)
 	if err != nil {
 		return domain.ReportSummary{}, fmt.Errorf("parse report created_at: %w", err)
 	}
+
 	return rep, nil
 }
 

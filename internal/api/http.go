@@ -224,11 +224,16 @@ func (s *Server) shouldTrustLocalRequest(r *http.Request) bool {
 		host = r.RemoteAddr
 	}
 	host = strings.TrimSpace(host)
-	if host == "localhost" {
-		return true
+	isLoopback := host == "localhost"
+	if !isLoopback {
+		ip := net.ParseIP(host)
+		isLoopback = ip != nil && ip.IsLoopback()
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	if isLoopback {
+		log.Printf("[SECURITY WARNING] Local request trusted without authentication. RemoteAddr=%s X-BridgeOS-Actor=%s X-BridgeOS-Roles=%s",
+			r.RemoteAddr, r.Header.Get("X-BridgeOS-Actor"), r.Header.Get("X-BridgeOS-Roles"))
+	}
+	return isLoopback
 }
 
 func (s *Server) withTrustedLocalClaims(r *http.Request) *http.Request {
@@ -517,7 +522,28 @@ func (s *Server) handleRunCase(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
-	approvals, err := s.svc.ListApprovals(r.Context(), r.URL.Query().Get("case_id"))
+	caseID := r.URL.Query().Get("case_id")
+	userID := middleware.GetUserIDFromContext(r.Context())
+	claims, _ := middleware.GetClaimsFromContext(r.Context())
+
+	if caseID != "" {
+		c, err := s.svc.GetCase(r.Context(), caseID, userID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if c.OwnerID != userID && !middleware.HasRole(claims, "admin") && !middleware.HasRole(claims, "approver") {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "message": "You do not have permission to view approvals for this case"})
+			return
+		}
+	} else {
+		if !middleware.HasRole(claims, "admin") && !middleware.HasRole(claims, "approver") {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "message": "Listing all approvals requires admin or approver role"})
+			return
+		}
+	}
+
+	approvals, err := s.svc.ListApprovals(r.Context(), caseID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -565,7 +591,8 @@ func (s *Server) handleBuildReport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
-	report, err := s.svc.BuildReport(r.Context(), caseID)
+	userID := middleware.GetUserIDFromContext(r.Context())
+	report, err := s.svc.BuildReport(r.Context(), caseID, userID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -574,7 +601,8 @@ func (s *Server) handleBuildReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListReports(w http.ResponseWriter, r *http.Request) {
-	reports, err := s.svc.ListReports(r.Context(), r.URL.Query().Get("case_id"))
+	userID := middleware.GetUserIDFromContext(r.Context())
+	reports, err := s.svc.ListReports(r.Context(), r.URL.Query().Get("case_id"), userID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -682,7 +710,7 @@ func writeError(w http.ResponseWriter, err error) {
 		}
 		writeJSON(w, status, map[string]any{
 			"code":    appErr.Code,
-			"error":   appErr.Message,
+			"error":   appErr.ErrorKey,
 			"message": appErr.Message,
 		})
 		return
@@ -690,7 +718,7 @@ func writeError(w http.ResponseWriter, err error) {
 
 	// Fallback for non-AppError
 	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "resource_not_found", "message": "Resource not found"})
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found", "message": "Resource not found"})
 		return
 	}
 	if errors.Is(err, store.ErrConcurrentModification) {

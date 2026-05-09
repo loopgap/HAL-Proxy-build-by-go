@@ -44,9 +44,10 @@ const (
 
 // AppError represents an application error with code and message
 type AppError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Err     error  `json:"-"`
+	Code     int    `json:"code"`
+	ErrorKey string `json:"error"`
+	Message  string `json:"message"`
+	Err      error  `json:"-"`
 }
 
 func (e *AppError) Error() string {
@@ -61,97 +62,99 @@ func (e *AppError) Unwrap() error {
 }
 
 // New creates a new AppError
-func New(code int, message string) *AppError {
+func New(code int, errorKey string, message string) *AppError {
 	return &AppError{
-		Code:    code,
-		Message: message,
+		Code:     code,
+		ErrorKey: errorKey,
+		Message:  message,
 	}
 }
 
 // Wrap wraps an existing error with code and message
-func Wrap(code int, message string, err error) *AppError {
+func Wrap(code int, errorKey string, message string, err error) *AppError {
 	return &AppError{
-		Code:    code,
-		Message: message,
-		Err:     err,
+		Code:     code,
+		ErrorKey: errorKey,
+		Message:  message,
+		Err:      err,
 	}
 }
 
 // WrapIf wraps an error only if it's not nil
-func WrapIf(code int, message string, err error) error {
+func WrapIf(code int, errorKey string, message string, err error) error {
 	if err == nil {
 		return nil
 	}
-	return Wrap(code, message, err)
+	return Wrap(code, errorKey, message, err)
 }
 
 // General errors
 var (
-	ErrInternal = New(ErrCodeInternal, "internal server error")
+	ErrInternal = New(ErrCodeInternal, "internal_server_error", "internal server error")
 )
 
 func ErrUnauthorized(reason string) *AppError {
-	return New(ErrCodeUnauthorized, fmt.Sprintf("unauthorized: %s", reason))
+	return New(ErrCodeUnauthorized, "unauthorized", fmt.Sprintf("unauthorized: %s", reason))
 }
 
 func ErrForbidden(reason string) *AppError {
-	return New(ErrCodeForbidden, fmt.Sprintf("forbidden: %s", reason))
+	return New(ErrCodeForbidden, "forbidden", fmt.Sprintf("forbidden: %s", reason))
 }
 
 func ErrConflict(reason string) *AppError {
-	return New(ErrCodeConflict, fmt.Sprintf("conflict: %s", reason))
+	return New(ErrCodeConflict, "conflict", fmt.Sprintf("conflict: %s", reason))
 }
 
 // Case errors
 func ErrCaseNotFound(id string) *AppError {
-	return New(ErrCodeCaseNotFound, fmt.Sprintf("case not found: %s", id))
+	return New(ErrCodeCaseNotFound, "case_not_found", fmt.Sprintf("case not found: %s", id))
 }
 
 func ErrCaseInvalidStatus(current, expected string) *AppError {
-	return New(ErrCodeCaseInvalidStatus, fmt.Sprintf("invalid status transition: current=%s, expected=%s", current, expected))
+	return New(ErrCodeCaseInvalidStatus, "case_invalid_status", fmt.Sprintf("invalid status transition: current=%s, expected=%s", current, expected))
 }
 
 func ErrCaseAlreadyExists(id string) *AppError {
-	return New(ErrCodeCaseAlreadyExists, fmt.Sprintf("case already exists: %s", id))
+	return New(ErrCodeCaseAlreadyExists, "case_already_exists", fmt.Sprintf("case already exists: %s", id))
 }
 
 func ErrCaseNotRunnable(id string, reason string) *AppError {
-	return New(ErrCodeCaseNotRunnable, fmt.Sprintf("case %s not runnable: %s", id, reason))
+	return New(ErrCodeCaseNotRunnable, "case_not_runnable", fmt.Sprintf("case %s not runnable: %s", id, reason))
 }
 
 // Approval errors
 func ErrApprovalNotFound(id string) *AppError {
-	return New(ErrCodeApprovalNotFound, fmt.Sprintf("approval not found: %s", id))
+	return New(ErrCodeApprovalNotFound, "approval_not_found", fmt.Sprintf("approval not found: %s", id))
 }
 
 func ErrApprovalInvalid(id string, reason string) *AppError {
-	return New(ErrCodeApprovalInvalid, fmt.Sprintf("invalid approval %s: %s", id, reason))
+	return New(ErrCodeApprovalInvalid, "approval_invalid", fmt.Sprintf("invalid approval %s: %s", id, reason))
 }
 
 func ErrApprovalExpired(id string) *AppError {
-	return New(ErrCodeApprovalExpired, fmt.Sprintf("approval expired: %s", id))
+	return New(ErrCodeApprovalExpired, "approval_expired", fmt.Sprintf("approval expired: %s", id))
 }
 
 // Report errors
 func ErrReportNotFound(reportID string) *AppError {
-	return New(ErrCodeReportNotFound, fmt.Sprintf("report not found: %s", reportID))
+	return New(ErrCodeReportNotFound, "report_not_found", fmt.Sprintf("report not found: %s", reportID))
 }
 
 func ErrReportGeneration(err error) *AppError {
-	return Wrap(ErrCodeReportGeneration, "failed to generate report", err)
+	return Wrap(ErrCodeReportGeneration, "report_generation_failed", "failed to generate report", err)
 }
 
 func ErrReportContentMissing(reportID string) *AppError {
-	return New(ErrCodeReportContentMissing, fmt.Sprintf("report content missing: %s", reportID))
+	return New(ErrCodeReportContentMissing, "report_content_missing", fmt.Sprintf("report content missing: %s", reportID))
 }
 
 // Store errors
 func ErrStoreInit(err error) *AppError {
-	return Wrap(ErrCodeStoreInit, "failed to initialize store", err)
+	return Wrap(ErrCodeStoreInit, "store_init_failed", "failed to initialize store", err)
 }
 
 func ErrStoreOperation(op string, err error) *AppError {
-	return Wrap(ErrCodeStoreOperation, fmt.Sprintf("store operation failed: %s", op), err)
+	return Wrap(ErrCodeStoreOperation, "store_operation_failed", fmt.Sprintf("store operation failed: %s", op), err)
 }
 
 // Is checks if the error matches the given code

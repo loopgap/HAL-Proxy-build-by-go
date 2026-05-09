@@ -4,14 +4,14 @@
 
 # === Go ===
 # Binaries
-bridge
-bridgeosd
-bridge.exe
-bridgeosd.exe
-hal
-hal-proxy
-hal.exe
-hal-proxy.exe
+/bridge
+/bridgeosd
+/bridge.exe
+/bridgeosd.exe
+/hal
+/hal-proxy
+/hal.exe
+/hal-proxy.exe
 *.exe
 bin/
 *.test
@@ -78,6 +78,7 @@ logs/
 *.log.*
 
 # === Coverage ===
+coverage/
 coverage.out
 coverage.html
 *.cover
@@ -113,8 +114,14 @@ release/
 .tmp-smoke/
 *.db-shm
 *.db-wal
-coverage.out
-coverage.html
 bin/
 otel-exporter.log
+
+# === Test Results ===
+ui/test-results/
+*.test.results.xml
+
+# === Playwright ===
+ui/playwright-report/
+ui/.playwright/
 

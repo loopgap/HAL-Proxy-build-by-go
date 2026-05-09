@@ -124,6 +124,7 @@ type Approval struct {
 type ReportSummary struct {
 	ID           string    `json:"id"`
 	CaseID       string    `json:"case_id"`
+	OwnerID      string    `json:"owner_id"`
 	Path         string    `json:"path"`
 	CommandCount int       `json:"command_count"`
 	EventCount   int       `json:"event_count"`

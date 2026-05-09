@@ -37,7 +37,7 @@ type Repository interface {
 	ListApprovals(context.Context, string) ([]domain.Approval, error)
 	UpdateApproval(context.Context, domain.Approval) error
 	CreateReport(context.Context, domain.ReportSummary) error
-	ListReports(context.Context, string) ([]domain.ReportSummary, error)
+	ListReports(context.Context, string, string) ([]domain.ReportSummary, error)
 	GetReport(context.Context, string) (domain.ReportSummary, error)
 	GetLatestReport(context.Context, string) (domain.ReportSummary, error)
 

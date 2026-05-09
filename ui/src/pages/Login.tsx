@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { jwtDecode } from 'jwt-decode'
 import { useAuthStore } from '@/store'
 import { Button } from '@/components/ui/Button'
 import { Card, CardContent, CardHeader } from '@/components/ui/Card'
@@ -23,11 +24,21 @@ export default function Login() {
       return
     }
 
-    login(
-      { id: 'api-token', name: 'API Token', email: 'token@bridgeos.local' },
-      trimmed
-    )
-    navigate(from, { replace: true })
+    try {
+      const decoded = jwtDecode<{ user_id?: string; username?: string; roles?: string[] }>(trimmed)
+      login(
+        {
+          id: decoded.user_id || 'api-token',
+          name: decoded.username || 'API Token',
+          email: '',
+          role: decoded.roles?.[0] || 'viewer',
+        },
+        trimmed
+      )
+      navigate(from, { replace: true })
+    } catch {
+      setError('Invalid token format')
+    }
   }
 
   const handleContinueTrusted = () => {

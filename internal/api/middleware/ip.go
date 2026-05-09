@@ -41,7 +41,6 @@ func isTrustedProxy(remoteAddr string, trustedProxies []string) bool {
 }
 
 func getClientIP(r *http.Request, trustedProxies []string) string {
-	// Only trust X-Forwarded-For if request comes from a trusted proxy
 	if isTrustedProxy(r.RemoteAddr, trustedProxies) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			for _, ip := range splitIPs(xff) {
@@ -49,11 +48,6 @@ func getClientIP(r *http.Request, trustedProxies []string) string {
 					return ip
 				}
 			}
-		}
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		if ip := trimIP(xri); ip != "" {
-			return ip
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

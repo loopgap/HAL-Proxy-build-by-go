@@ -2,7 +2,7 @@ package version
 
 var (
 	AppName   = "BridgeOS"
-	Version   = "0.2.3"
+	Version   = "0.4.1"
 	Commit    = "dev"
 	BuildDate = ""
 )

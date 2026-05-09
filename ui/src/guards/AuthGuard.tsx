@@ -23,7 +23,7 @@ export function AuthGuard({
   }
 
   if (requiredRoles.length > 0 && user) {
-    const hasRequiredRole = requiredRoles.some((role) => role === user.id || role === 'admin')
+    const hasRequiredRole = requiredRoles.includes(user.role) || user.role === 'admin'
     if (!hasRequiredRole) {
       return <Navigate to='/403' replace />
     }

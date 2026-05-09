@@ -19,6 +19,134 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestAuthorizationIDORProtection(t *testing.T) {
+	srv, cleanup := setupHTTPTestServer(t)
+	defer cleanup()
+
+	userACases := []domain.CaseRecord{}
+	for i := 0; i < 3; i++ {
+		c, err := srv.svc.CreateCase(context.Background(), domain.CaseSpec{
+			Title: "UserA-Case-" + string(rune('A'+i)),
+			Commands: []domain.CaseCommandSpec{
+				{Name: "read", Action: "read_mem", RiskClass: domain.RiskObserve},
+			},
+		}, "user-A")
+		if err != nil {
+			t.Fatal(err)
+		}
+		userACases = append(userACases, c)
+	}
+
+	userBCase, err := srv.svc.CreateCase(context.Background(), domain.CaseSpec{
+		Title: "UserB-Case",
+		Commands: []domain.CaseCommandSpec{
+			{Name: "read", Action: "read_mem", RiskClass: domain.RiskObserve},
+		},
+	}, "user-B")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("user-A cannot get user-B case", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/cases/"+userBCase.ID, nil)
+		req = reqWithUserClaims(req, "user-A", []string{})
+		resp := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusNotFound && resp.Code != http.StatusForbidden {
+			t.Errorf("expected 404 or 403 for cross-user case access, got %d", resp.Code)
+		}
+	})
+
+	t.Run("user-A cannot run user-B case", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/cases/"+userBCase.ID+"/run", nil)
+		req = reqWithUserClaims(req, "user-A", []string{})
+		resp := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusNotFound && resp.Code != http.StatusForbidden {
+			t.Errorf("expected 404 or 403 for cross-user case run, got %d", resp.Code)
+		}
+	})
+
+	t.Run("user-A can access own cases", func(t *testing.T) {
+		for _, c := range userACases {
+			req := httptest.NewRequest(http.MethodGet, "/v1/cases/"+c.ID, nil)
+			req = reqWithUserClaims(req, "user-A", []string{})
+			resp := httptest.NewRecorder()
+
+			srv.Handler().ServeHTTP(resp, req)
+
+			if resp.Code != http.StatusOK {
+				t.Errorf("expected 200 for own case %s, got %d", c.ID, resp.Code)
+			}
+		}
+	})
+}
+
+func TestListApprovalsAuthorization(t *testing.T) {
+	srv, cleanup := setupHTTPTestServer(t)
+	defer cleanup()
+
+	_, err := srv.svc.CreateCase(context.Background(), domain.CaseSpec{
+		Title: "Approval-Test-Case",
+		Commands: []domain.CaseCommandSpec{
+			{Name: "reset", Action: "reset", RiskClass: domain.RiskDestructive},
+		},
+	}, "owner-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("listing all approvals requires admin or approver role", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/approvals", nil)
+		req = reqWithUserClaims(req, "regular-user", []string{})
+		resp := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusForbidden {
+			t.Errorf("expected 403 for listing all approvals without admin role, got %d", resp.Code)
+		}
+	})
+
+	t.Run("admin can list all approvals", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/approvals", nil)
+		req = reqWithUserClaims(req, "admin-user", []string{"admin"})
+		resp := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusOK {
+			t.Errorf("expected 200 for admin listing approvals, got %d", resp.Code)
+		}
+	})
+
+	t.Run("approver can list all approvals", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/approvals", nil)
+		req = reqWithUserClaims(req, "approver-user", []string{"approver"})
+		resp := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusOK {
+			t.Errorf("expected 200 for approver listing approvals, got %d", resp.Code)
+		}
+	})
+}
+
+func reqWithUserClaims(req *http.Request, userID string, roles []string) *http.Request {
+	claims := &middleware.Claims{
+		UserID:   userID,
+		Username: userID,
+		Roles:    roles,
+	}
+	ctx := middleware.ContextWithClaims(req.Context(), claims)
+	return req.WithContext(ctx)
+}
+
 // mockBlacklist implements the middleware.TokenBlacklist interface for testing
 type mockBlacklist struct {
 	revoked map[string]bool
@@ -153,6 +281,7 @@ func TestReportsEndpointAndAliases(t *testing.T) {
 
 	buildReq := httptest.NewRequest(http.MethodPost, "/v1/reports/"+caseRecord.ID+"/build", nil)
 	buildReq.RemoteAddr = "127.0.0.1:12345"
+	buildReq = reqWithUserClaims(buildReq, "test-user", []string{})
 	buildResp := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(buildResp, buildReq)
 	if buildResp.Code != http.StatusOK {
@@ -162,6 +291,7 @@ func TestReportsEndpointAndAliases(t *testing.T) {
 	t.Run("list reports returns persisted report and supports case filter", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/reports?case_id="+caseRecord.ID, nil)
 		req.RemoteAddr = "127.0.0.1:12345"
+		req = reqWithUserClaims(req, "test-user", []string{})
 		resp := httptest.NewRecorder()
 
 		srv.Handler().ServeHTTP(resp, req)
@@ -195,6 +325,7 @@ func TestReportsEndpointAndAliases(t *testing.T) {
 
 		listReq := httptest.NewRequest(http.MethodGet, "/v1/reports?case_id="+caseRecord.ID, nil)
 		listReq.RemoteAddr = "127.0.0.1:12345"
+		listReq = reqWithUserClaims(listReq, "test-user", []string{})
 		listResp := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(listResp, listReq)
 		if listResp.Code != http.StatusOK {

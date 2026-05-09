@@ -307,6 +307,21 @@ func (c *Config) applyEnvOverrides() {
 	if roles := getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_ROLES", "HAL_PROXY_LOCAL_TRUSTED_ROLES", ""); roles != "" {
 		c.Auth.LocalTrustedRoles = parseCSV(roles)
 	}
+	if rl := os.Getenv("BRIDGEOS_RATE_LIMIT"); rl != "" {
+		if v, err := strconv.ParseBool(rl); err == nil {
+			c.RateLimit.Enabled = v
+		}
+	}
+	if rpm := os.Getenv("BRIDGEOS_RATE_LIMIT_RPM"); rpm != "" {
+		if v, err := strconv.Atoi(rpm); err == nil {
+			c.RateLimit.RequestsPerMinute = v
+		}
+	}
+	if burst := os.Getenv("BRIDGEOS_RATE_LIMIT_BURST"); burst != "" {
+		if v, err := strconv.Atoi(burst); err == nil {
+			c.RateLimit.BurstSize = v
+		}
+	}
 }
 
 func getEnvCompat(primary, legacy, def string) string {
@@ -359,6 +374,9 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Auth.JWTSecret) < 32 {
 		return fmt.Errorf("jwt_secret must be at least 32 characters long")
+	}
+	if strings.Contains(c.Auth.JWTSecret, "UNCONFIGURED") || strings.Contains(c.Auth.JWTSecret, "REQUIRED-SET") {
+		return fmt.Errorf("jwt_secret appears to be a default/placeholder value - please set a secure secret via BRIDGEOS_JWT_SECRET or HAL_PROXY_JWT_SECRET environment variable")
 	}
 
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}

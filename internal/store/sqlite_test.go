@@ -588,7 +588,7 @@ func TestListReports(t *testing.T) {
 		}
 	}
 
-	allReports, err := repo.ListReports(ctx, "")
+	allReports, err := repo.ListReports(ctx, "", "")
 	if err != nil {
 		t.Fatalf("Failed to list all reports: %v", err)
 	}
@@ -599,7 +599,7 @@ func TestListReports(t *testing.T) {
 		t.Fatalf("Reports not sorted by created_at desc: %+v", allReports)
 	}
 
-	caseReports, err := repo.ListReports(ctx, caseA.ID)
+	caseReports, err := repo.ListReports(ctx, caseA.ID, "")
 	if err != nil {
 		t.Fatalf("Failed to list case reports: %v", err)
 	}

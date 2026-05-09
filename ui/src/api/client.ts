@@ -50,9 +50,16 @@ api.interceptors.response.use(
     if (status === 401) { localStorage.removeItem('auth_token'); window.location.href = '/login' }
     if (status === 429 && originalRequest && shouldRetry(error)) { await delay(5000); return retryRequest(originalRequest) }
     if ((status === 500 || status === 502 || status === 503) && originalRequest && shouldRetry(error)) return retryRequest(originalRequest)
-    return Promise.reject({ message: (error.response.data as { error?: string })?.error || error.message, code: status.toString() })
+    const rawMessage = (error.response.data as { error?: string })?.error || error.message
+    return Promise.reject({ message: escapeHtml(rawMessage), code: status.toString() })
   }
 )
+
+function escapeHtml(text: string): string {
+  const div = document.createElement('div')
+  div.textContent = text
+  return div.innerHTML
+}
 
 function shouldRetry(error: AxiosError): boolean {
   const config = error.config as InternalAxiosRequestConfig & RequestConfig

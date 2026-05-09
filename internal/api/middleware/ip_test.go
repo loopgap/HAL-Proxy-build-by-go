@@ -145,12 +145,12 @@ func TestGetClientIP(t *testing.T) {
 			want:           "192.168.1.1",
 		},
 		{
-			name:           "X-Real-IP used when X-Forwarded-For not trusted",
+			name:           "X-Real-IP NOT trusted even from localhost - security fix",
 			remoteAddr:     "127.0.0.1:12345",
 			trustedProxies: []string{"10.0.0.1"},
 			xff:            "",
 			xri:            "203.0.113.1",
-			want:           "203.0.113.1", // X-Real-IP is still used from localhost
+			want:           "127.0.0.1", // X-Real-IP from localhost is NOT trusted - prevents IP spoofing
 		},
 		{
 			name:           "CIDR trusted proxy should trust X-Forwarded-For",

@@ -59,6 +59,50 @@ The daemon defaults to local-first trusted access for loopback requests when `BR
 
 The current pre-v1 build does not expose a username/password login endpoint. For UI access, use loopback trusted mode locally or provide an existing Bearer token.
 
+## Security Configuration
+
+### JWT Authentication
+
+**Required**: Set a secure JWT secret (minimum 32 characters):
+
+```bash
+export BRIDGEOS_JWT_SECRET="your-secure-secret-at-least-32-characters-long"
+```
+
+**Important**: The default placeholder secret is rejected at startup to prevent security misconfiguration.
+
+### Authentication Methods
+
+| Method | Use Case | Configuration |
+|--------|----------|---------------|
+| JWT Bearer Token | API clients, CI/CD | `Authorization: Bearer <token>` |
+| API Key | Service-to-service | `X-API-Key: <key>` |
+| Local Trusted Mode | Local development only | `BRIDGEOS_LOCAL_TRUSTED=true` |
+
+### Local Trusted Mode (Development Only)
+
+When `BRIDGEOS_LOCAL_TRUSTED=true`, requests from localhost/loopback bypass JWT authentication. This is intended for local development only.
+
+**Security Warning**: Never enable `BRIDGEOS_LOCAL_TRUSTED` in production or on exposed networks.
+
+### Rate Limiting
+
+Rate limiting is enabled by default (60 requests/minute, burst 10). Configure via:
+
+```bash
+export BRIDGEOS_RATE_LIMIT_ENABLED=true
+export BRIDGEOS_RATE_LIMIT_RPM=60
+export BRIDGEOS_RATE_LIMIT_BURST=10
+```
+
+### Security Best Practices
+
+1. **Use HTTPS** in production environments
+2. **Rotate JWT secrets** periodically
+3. **Disable local trusted mode** in production (`BRIDGEOS_LOCAL_TRUSTED=false`)
+4. **Use API keys** for service-to-service authentication
+5. **Monitor logs** for authentication failures
+
 ## Environment
 
 Preferred environment variables:

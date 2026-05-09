@@ -133,3 +133,44 @@ HTTP and CLI both converge on structured errors:
 ```
 
 `code` is present for application errors and omitted for generic transport/runtime failures.
+
+## Error Codes
+
+| Code | Error | Description |
+|------|-------|-------------|
+| 1001 | `internal_server_error` | Unexpected server error (details logged server-side) |
+| 1002 | `invalid_input` | Request validation failed |
+| 1003 | `not_found` | Requested resource does not exist |
+| 1004 | `unauthorized` | Missing or invalid authentication |
+| 1005 | `forbidden` | Insufficient permissions |
+| 1006 | `conflict` | Resource conflict (e.g., concurrent modification) |
+| 1007 | `timeout` | Request timed out |
+| 2001 | `case_not_found` | Case ID not found |
+| 2002 | `case_invalid_status` | Case cannot transition to requested status |
+| 2003 | `case_already_exists` | Case with this ID already exists |
+| 2004 | `case_not_runnable` | Case is in terminal state (completed/rejected) |
+| 3001 | `approval_not_found` | Approval ID not found |
+| 3002 | `approval_invalid` | Approval validation failed |
+| 3003 | `approval_expired` | Approval has expired |
+| 4001 | `report_not_found` | Report ID not found |
+| 4002 | `report_generation_failed` | Failed to generate report |
+| 4003 | `report_content_missing` | Report file not found on disk |
+| 5001 | `store_init_failed` | Database initialization failed |
+| 5002 | `store_operation_failed` | Database operation failed |
+| 5003 | `store_not_found` | Record not found in database |
+
+## HTTP Status Codes
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Success |
+| 201 | Created |
+| 400 | Bad Request (invalid input) |
+| 401 | Unauthorized (missing/invalid auth) |
+| 403 | Forbidden (insufficient permissions) |
+| 404 | Not Found |
+| 409 | Conflict (concurrent modification) |
+| 413 | Request Entity Too Large |
+| 429 | Too Many Requests (rate limited) |
+| 500 | Internal Server Error |
+| 503 | Service Unavailable |

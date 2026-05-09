@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 
 	"bridgeos/internal/core"
 	"bridgeos/internal/domain"
@@ -14,6 +15,12 @@ import (
 	"bridgeos/internal/store"
 	"bridgeos/internal/version"
 )
+
+var validActorRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+func isValidActor(actor string) bool {
+	return validActorRegex.MatchString(actor)
+}
 
 func main() {
 	ctx := context.Background()
@@ -66,6 +73,9 @@ func handleCase(ctx context.Context, svc *core.Service, args []string) {
 		if *specPath == "" {
 			fatalf("--spec is required")
 		}
+		if !isValidActor(*actor) {
+			fatalf("invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
+		}
 		var spec domain.CaseSpec
 		raw, err := os.ReadFile(*specPath)
 		exitOnErr(err)
@@ -81,6 +91,9 @@ func handleCase(ctx context.Context, svc *core.Service, args []string) {
 		if *id == "" {
 			fatalf("--id is required")
 		}
+		if !isValidActor(*actor) {
+			fatalf("invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
+		}
 		result, err := svc.RunCase(ctx, *id, *actor)
 		exitOnErr(err)
 		writeJSON(result)
@@ -91,6 +104,9 @@ func handleCase(ctx context.Context, svc *core.Service, args []string) {
 		_ = fs.Parse(args[1:])
 		if *id == "" {
 			fatalf("--id is required")
+		}
+		if !isValidActor(*actor) {
+			fatalf("invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
 		}
 		c, err := svc.GetCase(ctx, *id, *actor)
 		exitOnErr(err)
@@ -135,6 +151,9 @@ func handleApproval(ctx context.Context, svc *core.Service, args []string) {
 		if *id == "" {
 			fatalf("--id is required")
 		}
+		if !isValidActor(*actor) {
+			fatalf("invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
+		}
 		approval, err := svc.ResolveApproval(ctx, *id, *actor, args[0], *reason)
 		exitOnErr(err)
 		writeJSON(approval)
@@ -153,7 +172,7 @@ func handleReport(ctx context.Context, svc *core.Service, args []string) {
 	if *id == "" {
 		fatalf("--id is required")
 	}
-	report, err := svc.BuildReport(ctx, *id)
+	report, err := svc.BuildReport(ctx, *id, "")
 	exitOnErr(err)
 	writeJSON(report)
 }
