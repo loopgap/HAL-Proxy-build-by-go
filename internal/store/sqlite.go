@@ -282,12 +282,14 @@ func (r *SQLiteRepository) migrateReportsOwnerID(ctx context.Context) error {
 	}
 
 	// Populate owner_id for reports that have empty owner_id
+	// Only update if the corresponding case exists
 	_, err = r.db.ExecContext(ctx, `
 		UPDATE reports
 		SET owner_id = (
 			SELECT c.owner_id FROM cases c WHERE c.id = reports.case_id
 		)
-		WHERE reports.owner_id = ''`)
+		WHERE reports.owner_id = ''
+		AND EXISTS (SELECT 1 FROM cases WHERE id = reports.case_id)`)
 	return err
 }
 
@@ -398,6 +400,12 @@ func (r *SQLiteRepository) DeleteCase(ctx context.Context, id string) error {
 }
 
 func (r *SQLiteRepository) GetCaseWithRelations(ctx context.Context, id string) (domain.CaseWithRelations, error) {
+	tx, err := r.BeginTx(ctx)
+	if err != nil {
+		return domain.CaseWithRelations{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	c, err := r.GetCase(ctx, id)
 	if err != nil {
 		return domain.CaseWithRelations{}, err
@@ -411,6 +419,10 @@ func (r *SQLiteRepository) GetCaseWithRelations(ctx context.Context, id string) 
 	approvals, err := r.ListApprovals(ctx, id)
 	if err != nil {
 		return domain.CaseWithRelations{}, fmt.Errorf("list approvals: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return domain.CaseWithRelations{}, fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return domain.CaseWithRelations{
@@ -709,12 +721,12 @@ func (r *SQLiteRepository) ListReports(ctx context.Context, caseID string, owner
 	return reports, rows.Err()
 }
 
-func (r *SQLiteRepository) GetReport(ctx context.Context, id string) (domain.ReportSummary, error) {
+func (r *SQLiteRepository) GetReport(ctx context.Context, id string, ownerID string) (domain.ReportSummary, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports WHERE id = ?`, id)
 	return scanReport(row)
 }
 
-func (r *SQLiteRepository) GetLatestReport(ctx context.Context, caseID string) (domain.ReportSummary, error) {
+func (r *SQLiteRepository) GetLatestReport(ctx context.Context, caseID string, ownerID string) (domain.ReportSummary, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports WHERE case_id = ? ORDER BY created_at DESC LIMIT 1`, caseID)
 	return scanReport(row)
 }
