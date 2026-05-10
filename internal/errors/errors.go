@@ -93,6 +93,18 @@ var (
 	ErrInternal = New(ErrCodeInternal, "internal_server_error", "internal server error")
 )
 
+func ErrInvalidInput(message string) *AppError {
+	return New(ErrCodeInvalidInput, "invalid_input", message)
+}
+
+func ErrNotFound(resource string) *AppError {
+	return New(ErrCodeNotFound, "not_found", fmt.Sprintf("%s not found", resource))
+}
+
+func ErrTimeout(reason string) *AppError {
+	return New(ErrCodeTimeout, "timeout", fmt.Sprintf("timeout: %s", reason))
+}
+
 func ErrUnauthorized(reason string) *AppError {
 	return New(ErrCodeUnauthorized, "unauthorized", fmt.Sprintf("unauthorized: %s", reason))
 }

@@ -250,7 +250,7 @@ func setupHTTPTestServer(t *testing.T) (*Server, func()) {
 	}
 
 	svc := core.NewService(repo, t.TempDir())
-	srv := NewServer(svc, repo.DB(), repo.Blacklist, "test-secret-for-http-server-32chars", 24, "bridgeos-test", nil, true, "test-user", []string{"admin", "approver"})
+	srv := NewServer(svc, repo.DB(), repo.Blacklist, "test-secret-for-http-server-32chars", 24, "bridgeos-test", nil, true, "test-user", []string{"admin", "approver"}, nil, middleware.CORSConfig{})
 	srv.SetAuthMiddleware(func(next http.Handler) http.Handler { return next })
 
 	cleanup := func() {
@@ -282,7 +282,7 @@ func setupHTTPTestServerNoAuthBypass(t *testing.T) (*Server, func()) {
 	}
 
 	svc := core.NewService(repo, t.TempDir())
-	srv := NewServer(svc, repo.DB(), repo.Blacklist, "test-secret-for-http-server-32chars", 24, "bridgeos-test", nil, false, "", nil)
+	srv := NewServer(svc, repo.DB(), repo.Blacklist, "test-secret-for-http-server-32chars", 24, "bridgeos-test", nil, false, "", nil, nil, middleware.CORSConfig{})
 
 	cleanup := func() {
 		_ = repo.Close()

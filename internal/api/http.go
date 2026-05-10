@@ -29,6 +29,13 @@ const MaxBodySize = 1 << 20 // 1MB
 // RequestTimeout sets the maximum duration for request processing
 const RequestTimeout = 30 * time.Second
 
+func sanitizeLogValue(s string) string {
+	s = strings.ReplaceAll(s, "\n", "_")
+	s = strings.ReplaceAll(s, "\r", "_")
+	s = strings.ReplaceAll(s, "\t", "_")
+	return s
+}
+
 // Server handles HTTP API requests with security best practices
 type Server struct {
 	svc            *core.Service
@@ -39,6 +46,8 @@ type Server struct {
 	localTrusted   bool
 	localActor     string
 	localRoles     []string
+	rateLimiter    *middleware.RateLimiter
+	corsConfig     middleware.CORSConfig
 }
 
 type healthChecker interface {
@@ -51,7 +60,7 @@ type tokenRevocationStore interface {
 }
 
 // NewServer creates a new API server instance
-func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRevocationStore, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string, localTrusted bool, localActor string, localRoles []string) *Server {
+func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRevocationStore, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string, localTrusted bool, localActor string, localRoles []string, rateLimiter *middleware.RateLimiter, corsConfig middleware.CORSConfig) *Server {
 	jwtConfig := middleware.JWTConfig{
 		Secret:          jwtSecret,
 		ExpirationHours: jwtExpiryHours,
@@ -78,6 +87,8 @@ func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRe
 		localTrusted:   localTrusted,
 		localActor:     localActor,
 		localRoles:     localRoles,
+		rateLimiter:    rateLimiter,
+		corsConfig:     corsConfig,
 	}
 }
 
@@ -88,7 +99,19 @@ func (s *Server) SetAuthMiddleware(middleware func(http.Handler) http.Handler) {
 
 // Handler returns the HTTP handler with all routes configured
 func (s *Server) Handler() http.Handler {
-	return http.HandlerFunc(s.route)
+	var root http.Handler = http.HandlerFunc(s.route)
+
+	root = middleware.CORS(s.corsConfig)(root)
+
+	if s.authMiddleware != nil {
+		root = s.authMiddleware(root)
+	}
+
+	if s.rateLimiter != nil {
+		root = middleware.RateLimit(s.rateLimiter, s.trustedProxies)(root)
+	}
+
+	return root
 }
 
 // normalizePath converts actual request paths to route templates to reduce Prometheus label cardinality
@@ -230,26 +253,20 @@ func (s *Server) shouldTrustLocalRequest(r *http.Request) bool {
 		isLoopback = ip != nil && ip.IsLoopback()
 	}
 	if isLoopback {
-		log.Printf("[SECURITY WARNING] Local request trusted without authentication. RemoteAddr=%s X-BridgeOS-Actor=%s X-BridgeOS-Roles=%s",
-			r.RemoteAddr, r.Header.Get("X-BridgeOS-Actor"), r.Header.Get("X-BridgeOS-Roles"))
+		log.Printf("[SECURITY WARNING] Local request trusted without authentication. RemoteAddr=%s",
+			sanitizeLogValue(r.RemoteAddr))
 	}
 	return isLoopback
 }
 
 func (s *Server) withTrustedLocalClaims(r *http.Request) *http.Request {
-	actor := strings.TrimSpace(r.Header.Get("X-BridgeOS-Actor"))
-	if actor == "" {
-		actor = s.localActor
-	}
+	actor := s.localActor
 	if actor == "" {
 		actor = "local-agent"
 	}
-	roles := append([]string(nil), s.localRoles...)
-	if headerRoles := strings.TrimSpace(r.Header.Get("X-BridgeOS-Roles")); headerRoles != "" {
-		roles = strings.Split(headerRoles, ",")
-		for i := range roles {
-			roles[i] = strings.TrimSpace(roles[i])
-		}
+	roles := s.localRoles
+	if roles == nil {
+		roles = []string{"service"}
 	}
 	claims := &middleware.Claims{
 		UserID:   actor,
@@ -616,8 +633,8 @@ func (s *Server) handleGetReport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_report_id"})
 		return
 	}
-
-	report, err := s.svc.GetReport(r.Context(), reportID)
+	userID := middleware.GetUserIDFromContext(r.Context())
+	report, err := s.svc.GetReport(r.Context(), reportID, userID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -631,8 +648,8 @@ func (s *Server) handleGetReportContent(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_report_id"})
 		return
 	}
-
-	report, body, err := s.svc.GetReportContent(r.Context(), reportID)
+	userID := middleware.GetUserIDFromContext(r.Context())
+	report, body, err := s.svc.GetReportContent(r.Context(), reportID, userID)
 	if err != nil {
 		writeError(w, err)
 		return

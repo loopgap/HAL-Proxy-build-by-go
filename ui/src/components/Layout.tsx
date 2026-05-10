@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Activity, FileText, CheckCircle, LayoutDashboard, Menu, LogOut } from 'lucide-react'
 import { useAuthStore } from '@/store'
+import ThemeToggle from './ui/ThemeToggle'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -53,16 +54,19 @@ export default function Layout({ children }: LayoutProps) {
         ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         <div className="p-4 border-b border-gray-700">
-          <div className='flex items-center gap-2'>
-            <button 
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className='md:hidden p-2'
-            >
-              <Menu className="w-6 h-6" />
-            </button>
-            <h1 className="text-xl font-bold flex items-center gap-2">
-              BridgeOS
-            </h1>
+          <div className='flex items-center justify-between'>
+            <div className='flex items-center gap-2'>
+              <button
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                className='md:hidden p-2'
+              >
+                <Menu className="w-6 h-6" />
+              </button>
+              <h1 className="text-xl font-bold flex items-center gap-2">
+                BridgeOS
+              </h1>
+            </div>
+            <ThemeToggle />
           </div>
         </div>
         

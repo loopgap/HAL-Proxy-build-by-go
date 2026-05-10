@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -47,18 +49,18 @@ func (m *JWTAuthenticator) Middleware() Middleware {
 			ctx := r.Context()
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
-				http.Error(w, "missing_authorization_header", http.StatusUnauthorized)
+				writeAuthError(w, "missing_authorization_header", http.StatusUnauthorized)
 				return
 			}
 			parts := strings.SplitN(authHeader, " ", 2)
 			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-				http.Error(w, "invalid_authorization_format", http.StatusUnauthorized)
+				writeAuthError(w, "invalid_authorization_format", http.StatusUnauthorized)
 				return
 			}
 			tokenString := parts[1]
 			claims, err := m.ValidateToken(ctx, tokenString)
 			if err != nil {
-				http.Error(w, "invalid_token", http.StatusUnauthorized)
+				writeAuthError(w, "invalid_token", http.StatusUnauthorized)
 				return
 			}
 			ctx = context.WithValue(ctx, claimsContextKey, claims)
@@ -66,6 +68,12 @@ func (m *JWTAuthenticator) Middleware() Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func writeAuthError(w http.ResponseWriter, errorKey string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": errorKey})
 }
 
 // ValidateToken validates a JWT token and checks the blacklist
@@ -176,4 +184,14 @@ func HasRole(claims *Claims, role string) bool {
 // IsAdmin returns true if the claims have the admin role
 func IsAdmin(claims *Claims) bool {
 	return HasRole(claims, "admin")
+}
+
+// IsLoopbackRequest returns true if the request originates from a loopback address
+func IsLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

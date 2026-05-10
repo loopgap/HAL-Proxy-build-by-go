@@ -13,14 +13,20 @@ type RateLimiter struct {
 	mu       sync.RWMutex
 	limit    int
 	window   time.Duration
+	burst    int
 	done     chan struct{}
 }
 
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
+	return NewRateLimiterWithBurst(limit, window, 0)
+}
+
+func NewRateLimiterWithBurst(limit int, window time.Duration, burstSize int) *RateLimiter {
 	rl := &RateLimiter{
 		requests: make(map[string][]time.Time),
 		limit:    limit,
 		window:   window,
+		burst:    burstSize,
 		done:     make(chan struct{}),
 	}
 	go rl.cleanup()

@@ -18,6 +18,7 @@ type Config struct {
 	Log       LogConfig       `json:"log"`
 	Auth      AuthConfig      `json:"auth"`
 	RateLimit RateLimitConfig `json:"rate_limit"`
+	CORS      CORSConfig      `json:"cors"`
 }
 
 // ServerConfig holds HTTP server configuration
@@ -72,6 +73,23 @@ type RateLimitConfig struct {
 	BurstSize         int  `json:"burst_size"`
 }
 
+// CORSConfig holds CORS configuration
+type CORSConfig struct {
+	AllowedOrigins []string `json:"allowed_origins"`
+	AllowMethods  []string `json:"allow_methods"`
+	AllowHeaders  []string `json:"allow_headers"`
+	MaxAge        int      `json:"max_age"`
+}
+
+func (c CORSConfig) Validate() error {
+	for _, origin := range c.AllowedOrigins {
+		if origin == "*" {
+			return fmt.Errorf("CORS wildcard origin is not allowed for security reasons")
+		}
+	}
+	return nil
+}
+
 // DefaultConfig returns a default configuration
 func DefaultConfig() *Config {
 	return &Config{
@@ -104,14 +122,20 @@ func DefaultConfig() *Config {
 			JWTExpiryHours:     24,
 			JWTIssuer:          getEnvCompat("BRIDGEOS_JWT_ISSUER", "HAL_PROXY_JWT_ISSUER", "bridgeos"),
 			APIKeys:            parseAPIKeys(getEnvCompat("BRIDGEOS_API_KEYS", "HAL_PROXY_API_KEYS", "")),
-			LocalTrusted:       getEnvBoolCompat("BRIDGEOS_LOCAL_TRUSTED", "HAL_PROXY_LOCAL_TRUSTED", true),
+			LocalTrusted:       getEnvBoolCompat("BRIDGEOS_LOCAL_TRUSTED", "HAL_PROXY_LOCAL_TRUSTED", false),
 			LocalTrustedUserID: getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_USER_ID", "HAL_PROXY_LOCAL_TRUSTED_USER_ID", "local-agent"),
-			LocalTrustedRoles:  parseCSV(getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_ROLES", "HAL_PROXY_LOCAL_TRUSTED_ROLES", "admin,approver")),
+			LocalTrustedRoles:  parseCSV(getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_ROLES", "HAL_PROXY_LOCAL_TRUSTED_ROLES", "service")),
 		},
 		RateLimit: RateLimitConfig{
 			Enabled:           true,
 			RequestsPerMinute: 60,
 			BurstSize:         10,
+		},
+		CORS: CORSConfig{
+			AllowedOrigins: []string{"http://localhost:3000", "http://localhost:5173"},
+			AllowMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+			AllowHeaders:   []string{"Accept", "Content-Type", "Authorization", "X-Request-ID"},
+			MaxAge:         86400,
 		},
 	}
 }
@@ -271,6 +295,17 @@ func parseConfigLine(config *Config, line string) {
 		if v, err := strconv.Atoi(value); err == nil {
 			config.RateLimit.BurstSize = v
 		}
+	// CORS config
+	case "cors.allowed_origins":
+		config.CORS.AllowedOrigins = parseCSV(value)
+	case "cors.allow_methods":
+		config.CORS.AllowMethods = parseCSV(value)
+	case "cors.allow_headers":
+		config.CORS.AllowHeaders = parseCSV(value)
+	case "cors.max_age":
+		if v, err := strconv.Atoi(value); err == nil {
+			config.CORS.MaxAge = v
+		}
 	}
 }
 
@@ -307,19 +342,33 @@ func (c *Config) applyEnvOverrides() {
 	if roles := getEnvCompat("BRIDGEOS_LOCAL_TRUSTED_ROLES", "HAL_PROXY_LOCAL_TRUSTED_ROLES", ""); roles != "" {
 		c.Auth.LocalTrustedRoles = parseCSV(roles)
 	}
-	if rl := os.Getenv("BRIDGEOS_RATE_LIMIT"); rl != "" {
+	if rl := getEnvCompat("BRIDGEOS_RATE_LIMIT", "HAL_PROXY_RATE_LIMIT", ""); rl != "" {
 		if v, err := strconv.ParseBool(rl); err == nil {
 			c.RateLimit.Enabled = v
 		}
 	}
-	if rpm := os.Getenv("BRIDGEOS_RATE_LIMIT_RPM"); rpm != "" {
+	if rpm := getEnvCompat("BRIDGEOS_RATE_LIMIT_RPM", "HAL_PROXY_RATE_LIMIT_RPM", ""); rpm != "" {
 		if v, err := strconv.Atoi(rpm); err == nil {
 			c.RateLimit.RequestsPerMinute = v
 		}
 	}
-	if burst := os.Getenv("BRIDGEOS_RATE_LIMIT_BURST"); burst != "" {
+	if burst := getEnvCompat("BRIDGEOS_RATE_LIMIT_BURST", "HAL_PROXY_RATE_LIMIT_BURST", ""); burst != "" {
 		if v, err := strconv.Atoi(burst); err == nil {
 			c.RateLimit.BurstSize = v
+		}
+	}
+	if origins := getEnvCompat("BRIDGEOS_CORS_ALLOWED_ORIGINS", "HAL_PROXY_CORS_ALLOWED_ORIGINS", ""); origins != "" {
+		c.CORS.AllowedOrigins = parseCSV(origins)
+	}
+	if methods := getEnvCompat("BRIDGEOS_CORS_ALLOW_METHODS", "HAL_PROXY_CORS_ALLOW_METHODS", ""); methods != "" {
+		c.CORS.AllowMethods = parseCSV(methods)
+	}
+	if headers := getEnvCompat("BRIDGEOS_CORS_ALLOW_HEADERS", "HAL_PROXY_CORS_ALLOW_HEADERS", ""); headers != "" {
+		c.CORS.AllowHeaders = parseCSV(headers)
+	}
+	if maxAge := getEnvCompat("BRIDGEOS_CORS_MAX_AGE", "HAL_PROXY_CORS_MAX_AGE", ""); maxAge != "" {
+		if v, err := strconv.Atoi(maxAge); err == nil {
+			c.CORS.MaxAge = v
 		}
 	}
 }
@@ -387,6 +436,10 @@ func (c *Config) Validate() error {
 	validFormats := map[string]bool{"json": true, "text": true}
 	if !validFormats[c.Log.Format] {
 		return fmt.Errorf("invalid log format: %s", c.Log.Format)
+	}
+
+	if err := c.CORS.Validate(); err != nil {
+		return fmt.Errorf("invalid CORS config: %w", err)
 	}
 
 	return nil

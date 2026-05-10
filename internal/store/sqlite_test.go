@@ -496,7 +496,7 @@ func TestCreateAndGetReport(t *testing.T) {
 	}
 
 	// Get latest report
-	retrieved, err := repo.GetLatestReport(ctx, "test-case-report")
+	retrieved, err := repo.GetLatestReport(ctx, "test-case-report", "")
 	if err != nil {
 		t.Fatalf("Failed to get latest report: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestGetLatestReportNotFound(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	_, err := repo.GetLatestReport(ctx, "non-existent-case")
+	_, err := repo.GetLatestReport(ctx, "non-existent-case", "")
 
 	if err != ErrNotFound {
 		t.Errorf("Expected ErrNotFound, got %v", err)
@@ -644,7 +644,7 @@ func TestGetReport(t *testing.T) {
 		t.Fatalf("Failed to create report: %v", err)
 	}
 
-	retrieved, err := repo.GetReport(ctx, report.ID)
+	retrieved, err := repo.GetReport(ctx, report.ID, "")
 	if err != nil {
 		t.Fatalf("Failed to get report by id: %v", err)
 	}
@@ -652,7 +652,7 @@ func TestGetReport(t *testing.T) {
 		t.Fatalf("Expected report id %s, got %s", report.ID, retrieved.ID)
 	}
 
-	if _, err := repo.GetReport(ctx, "missing-report"); err != ErrNotFound {
+	if _, err := repo.GetReport(ctx, "missing-report", ""); err != ErrNotFound {
 		t.Fatalf("Expected ErrNotFound for missing report, got %v", err)
 	}
 }

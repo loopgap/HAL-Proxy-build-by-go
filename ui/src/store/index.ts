@@ -17,32 +17,43 @@ interface AuthState {
   updateUser: (user: Partial<User>) => void
 }
 
+const getStoredToken = (): { user: User | null; token: string | null } => {
+  try {
+    const stored = sessionStorage.getItem('auth_token')
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      return { user: parsed.user, token: parsed.token }
+    }
+  } catch {
+  }
+  return { user: null, token: null }
+}
+
+const initialAuth = getStoredToken()
+
 export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
-      user: null,
-      token: null,
-      isAuthenticated: false,
-      login: (user, token) => {
-        try {
-          localStorage.setItem('auth_token', token)
-        } catch (error) {
-          console.warn('Failed to persist auth token:', error)
-        }
-        set({ user, token, isAuthenticated: true })
-      },
-      logout: () => {
-        try {
-          localStorage.removeItem('auth_token')
-        } catch (error) {
-          console.warn('Failed to remove auth token:', error)
-        }
-        set({ user: null, token: null, isAuthenticated: false })
-      },
-      updateUser: (updates) => set((state) => ({ user: state.user ? { ...state.user, ...updates } : null })),
-    }),
-    { name: 'auth-storage', storage: createJSONStorage(() => localStorage), partialize: (state) => ({ user: state.user, token: state.token, isAuthenticated: state.isAuthenticated }) }
-  )
+  (set) => ({
+    user: initialAuth.user,
+    token: initialAuth.token,
+    isAuthenticated: initialAuth.token !== null,
+    login: (user, token) => {
+      const data = JSON.stringify({ user, token })
+      try {
+        sessionStorage.setItem('auth_token', data)
+      } catch {
+        console.warn('Failed to persist auth token - session storage may be unavailable')
+      }
+      set({ user, token, isAuthenticated: token !== null })
+    },
+    logout: () => {
+      try {
+        sessionStorage.removeItem('auth_token')
+      } catch {
+      }
+      set({ user: null, token: null, isAuthenticated: false })
+    },
+    updateUser: (updates) => set((state) => ({ user: state.user ? { ...state.user, ...updates } : null })),
+  })
 )
 
 interface UIState {

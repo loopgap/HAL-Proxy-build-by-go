@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace"
 
 	"bridgeos/internal/api"
+	"bridgeos/internal/api/middleware"
 	"bridgeos/internal/config"
 	"bridgeos/internal/core"
 	"bridgeos/internal/store"
@@ -44,6 +45,12 @@ func main() {
 		otel.SetTracerProvider(tp)
 	}
 
+	// Create rate limiter if enabled
+	var rateLimiter *middleware.RateLimiter
+	if cfg.RateLimit.Enabled {
+		rateLimiter = middleware.NewRateLimiterWithBurst(cfg.RateLimit.RequestsPerMinute, time.Minute, cfg.RateLimit.BurstSize)
+	}
+
 	svc := core.NewService(repo, cfg.App.ArtifactsDir)
 	if err := svc.Init(context.Background()); err != nil {
 		log.Fatal(err)
@@ -60,6 +67,13 @@ func main() {
 		cfg.Auth.LocalTrusted,
 		cfg.Auth.LocalTrustedUserID,
 		cfg.Auth.LocalTrustedRoles,
+		rateLimiter,
+		middleware.CORSConfig{
+			AllowOrigins: cfg.CORS.AllowedOrigins,
+			AllowMethods: cfg.CORS.AllowMethods,
+			AllowHeaders: cfg.CORS.AllowHeaders,
+			MaxAge:       cfg.CORS.MaxAge,
+		},
 	)
 
 	srv := &http.Server{

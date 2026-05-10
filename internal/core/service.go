@@ -456,25 +456,28 @@ func (s *Service) ListReports(ctx context.Context, caseID string, ownerID string
 	return s.repo.ListReports(ctx, caseID, ownerID)
 }
 
-func (s *Service) GetReport(ctx context.Context, reportID string) (domain.ReportSummary, error) {
+func (s *Service) GetReport(ctx context.Context, reportID string, ownerID string) (domain.ReportSummary, error) {
 	ctx, span := s.tracer.Start(ctx, "service.get_report")
 	defer span.End()
 
-	report, err := s.repo.GetReport(ctx, reportID)
+	report, err := s.repo.GetReport(ctx, reportID, ownerID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return domain.ReportSummary{}, apperrors.ErrReportNotFound(reportID)
 		}
 		return domain.ReportSummary{}, err
 	}
+	if report.OwnerID != ownerID && ownerID != "" {
+		return domain.ReportSummary{}, apperrors.ErrForbidden("report access denied")
+	}
 	return report, nil
 }
 
-func (s *Service) GetReportContent(ctx context.Context, reportID string) (domain.ReportSummary, []byte, error) {
+func (s *Service) GetReportContent(ctx context.Context, reportID string, ownerID string) (domain.ReportSummary, []byte, error) {
 	ctx, span := s.tracer.Start(ctx, "service.get_report_content")
 	defer span.End()
 
-	report, err := s.GetReport(ctx, reportID)
+	report, err := s.GetReport(ctx, reportID, ownerID)
 	if err != nil {
 		return domain.ReportSummary{}, nil, err
 	}
