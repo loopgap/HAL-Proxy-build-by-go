@@ -125,3 +125,4 @@ ui/test-results/
 ui/playwright-report/
 ui/.playwright/
 
+coverage/

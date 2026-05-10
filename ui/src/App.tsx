@@ -1,18 +1,26 @@
-import { lazy } from 'react'
+import { lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
-import { RouteErrorBoundary } from './components/ui/RouteErrorBoundary'
+import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { Breadcrumbs, useBreadcrumbs } from './components/ui/Breadcrumbs'
 import { AuthGuard } from './guards/AuthGuard'
 import NotFoundPage from './pages/NotFound'
 import Login from './pages/Login'
+import LoadingSpinner from './components/ui/LoadingSpinner'
 
-// Lazy load all page components for code splitting
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const CaseList = lazy(() => import('./pages/CaseList'))
 const CaseDetail = lazy(() => import('./pages/CaseDetail'))
 const ApprovalList = lazy(() => import('./pages/ApprovalList'))
 const ReportList = lazy(() => import('./pages/ReportList'))
+
+function PageLoader() {
+  return (
+    <div className='flex items-center justify-center h-64'>
+      <LoadingSpinner size='lg' label='Loading page...' />
+    </div>
+  )
+}
 
 function PageWrapper({ children }: { children: React.ReactNode }) {
   const breadcrumbs = useBreadcrumbs()
@@ -34,9 +42,11 @@ function App() {
             path='/'
             element={
               <AuthGuard>
-                <RouteErrorBoundary>
-                  <Dashboard />
-                </RouteErrorBoundary>
+                <ErrorBoundary>
+                  <Suspense fallback={<PageLoader />}>
+                    <Dashboard />
+                  </Suspense>
+                </ErrorBoundary>
               </AuthGuard>
             }
           />
@@ -44,9 +54,11 @@ function App() {
             path='/cases'
             element={
               <AuthGuard>
-                <RouteErrorBoundary>
-                  <CaseList />
-                </RouteErrorBoundary>
+                <ErrorBoundary>
+                  <Suspense fallback={<PageLoader />}>
+                    <CaseList />
+                  </Suspense>
+                </ErrorBoundary>
               </AuthGuard>
             }
           />
@@ -54,9 +66,11 @@ function App() {
             path='/cases/:id'
             element={
               <AuthGuard>
-                <RouteErrorBoundary>
-                  <CaseDetail />
-                </RouteErrorBoundary>
+                <ErrorBoundary>
+                  <Suspense fallback={<PageLoader />}>
+                    <CaseDetail />
+                  </Suspense>
+                </ErrorBoundary>
               </AuthGuard>
             }
           />
@@ -64,9 +78,11 @@ function App() {
             path='/approvals'
             element={
               <AuthGuard>
-                <RouteErrorBoundary>
-                  <ApprovalList />
-                </RouteErrorBoundary>
+                <ErrorBoundary>
+                  <Suspense fallback={<PageLoader />}>
+                    <ApprovalList />
+                  </Suspense>
+                </ErrorBoundary>
               </AuthGuard>
             }
           />
@@ -74,9 +90,11 @@ function App() {
             path='/reports'
             element={
               <AuthGuard>
-                <RouteErrorBoundary>
-                  <ReportList />
-                </RouteErrorBoundary>
+                <ErrorBoundary>
+                  <Suspense fallback={<PageLoader />}>
+                    <ReportList />
+                  </Suspense>
+                </ErrorBoundary>
               </AuthGuard>
             }
           />

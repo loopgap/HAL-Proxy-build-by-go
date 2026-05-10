@@ -19,6 +19,68 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestAuthenticationRequired(t *testing.T) {
+	srv, cleanup := setupHTTPTestServerNoAuthBypass(t)
+	defer cleanup()
+
+	jwtConfig := middleware.JWTConfig{
+		Secret:          "test-secret-for-http-server-32chars",
+		ExpirationHours: 24,
+		Issuer:          "bridgeos-test",
+	}
+
+	validToken, err := middleware.GenerateToken(jwtConfig, "test-user", "test-user", []string{"admin"})
+	if err != nil {
+		t.Fatalf("Failed to generate valid token: %v", err)
+	}
+
+	testCases := []struct {
+		name           string
+		path           string
+		method         string
+		token          string
+		expectedStatus int
+	}{
+		{"no token - list cases", "/v1/cases", http.MethodGet, "", http.StatusUnauthorized},
+		{"no token - list approvals", "/v1/approvals", http.MethodGet, "", http.StatusUnauthorized},
+		{"no token - list reports", "/v1/reports", http.MethodGet, "", http.StatusUnauthorized},
+		{"no token - list sessions", "/v1/sessions", http.MethodGet, "", http.StatusUnauthorized},
+		{"no token - list devices", "/v1/devices", http.MethodGet, "", http.StatusUnauthorized},
+		{"invalid token - list cases", "/v1/cases", http.MethodGet, "invalid-token", http.StatusUnauthorized},
+		{"invalid token - list approvals", "/v1/approvals", http.MethodGet, "invalid-token", http.StatusUnauthorized},
+		{"malformed token - list cases", "/v1/cases", http.MethodGet, "Bearer not.a.valid.jwt", http.StatusUnauthorized},
+		{"wrong secret token - list cases", "/v1/cases", http.MethodGet, func() string {
+			wrongToken, _ := middleware.GenerateToken(middleware.JWTConfig{
+				Secret:          "wrong-secret-key-32-characters!!",
+				ExpirationHours: 24,
+				Issuer:          "bridgeos-test",
+			}, "test-user", "test-user", []string{})
+			return wrongToken
+		}(), http.StatusUnauthorized},
+		{"valid token - list cases", "/v1/cases", http.MethodGet, validToken, http.StatusOK},
+		{"valid token - list approvals", "/v1/approvals", http.MethodGet, validToken, http.StatusOK},
+		{"valid token - list reports", "/v1/reports", http.MethodGet, validToken, http.StatusOK},
+		{"valid token - list sessions", "/v1/sessions", http.MethodGet, validToken, http.StatusOK},
+		{"valid token - list devices", "/v1/devices", http.MethodGet, validToken, http.StatusOK},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			resp := httptest.NewRecorder()
+
+			srv.Handler().ServeHTTP(resp, req)
+
+			if resp.Code != tc.expectedStatus {
+				t.Errorf("expected status %d, got %d for %s %s", tc.expectedStatus, resp.Code, tc.method, tc.path)
+			}
+		})
+	}
+}
+
 func TestAuthorizationIDORProtection(t *testing.T) {
 	srv, cleanup := setupHTTPTestServer(t)
 	defer cleanup()
@@ -190,6 +252,37 @@ func setupHTTPTestServer(t *testing.T) (*Server, func()) {
 	svc := core.NewService(repo, t.TempDir())
 	srv := NewServer(svc, repo.DB(), repo.Blacklist, "test-secret-for-http-server-32chars", 24, "bridgeos-test", nil, true, "test-user", []string{"admin", "approver"})
 	srv.SetAuthMiddleware(func(next http.Handler) http.Handler { return next })
+
+	cleanup := func() {
+		_ = repo.Close()
+		_ = os.Remove(tmpFile.Name())
+	}
+
+	return srv, cleanup
+}
+
+func setupHTTPTestServerNoAuthBypass(t *testing.T) (*Server, func()) {
+	t.Helper()
+
+	tmpFile, err := os.CreateTemp("", "bridgeos-http-test-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp DB: %v", err)
+	}
+	tmpFile.Close()
+
+	repo, err := store.NewSQLiteRepository(tmpFile.Name())
+	if err != nil {
+		_ = os.Remove(tmpFile.Name())
+		t.Fatalf("Failed to create repository: %v", err)
+	}
+	if err := repo.Init(context.Background()); err != nil {
+		_ = repo.Close()
+		_ = os.Remove(tmpFile.Name())
+		t.Fatalf("Failed to init repository: %v", err)
+	}
+
+	svc := core.NewService(repo, t.TempDir())
+	srv := NewServer(svc, repo.DB(), repo.Blacklist, "test-secret-for-http-server-32chars", 24, "bridgeos-test", nil, false, "", nil)
 
 	cleanup := func() {
 		_ = repo.Close()

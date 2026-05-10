@@ -49,6 +49,11 @@ test.describe('HAL-Proxy Navigation', () => {
     await expect(page).toHaveURL(/\/cases/)
   })
 
+  test('cases page loads and displays case list', async ({ page }) => {
+    await page.goto('/cases')
+    await expect(page.getByRole('heading', { name: /Cases/i })).toBeVisible()
+  })
+
   test('user can navigate to approvals page', async ({ page }) => {
     await page.getByRole('link', { name: /Approvals/i }).click()
     await expect(page).toHaveURL(/\/approvals/)
