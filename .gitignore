@@ -85,6 +85,7 @@ coverage.html
 
 # === Temporary ===
 *.tmp
+.tmp/
 *.bak
 *.orig
 *.old

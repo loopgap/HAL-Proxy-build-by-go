@@ -1,0 +1,72 @@
+name: Release Backfill
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Historical tag to backfill
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+env:
+  TARGET_TAG: ${{ github.event.inputs.tag || 'v0.1.0' }}
+
+jobs:
+  backfill:
+    name: Backfill historical release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create missing release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const tag = process.env.TARGET_TAG;
+            const { owner, repo } = context.repo;
+
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` });
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed(`Tag ${tag} does not exist on the remote.`);
+                return;
+              }
+              throw error;
+            }
+
+            try {
+              const existing = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+              core.notice(`Release already exists for ${tag}: ${existing.data.html_url}`);
+              return;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+            const notesPath = `docs/releases/${tag}.md`;
+            const body = fs.existsSync(notesPath)
+              ? fs.readFileSync(notesPath, 'utf8')
+              : `Historical release backfill for ${tag}.`;
+
+            const release = await github.rest.repos.createRelease({
+              owner,
+              repo,
+              tag_name: tag,
+              name: `BridgeOS ${tag}`,
+              body,
+              draft: false,
+              prerelease: true,
+              make_latest: 'false',
+            });
+            core.notice(`Created release ${release.data.html_url}`);

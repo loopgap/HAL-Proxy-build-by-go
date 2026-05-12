@@ -2,7 +2,7 @@
 
 .PHONY: all build test clean run bridge bridgeosd install docker-build docker-run fmt lint lint-check
 .PHONY: frontend frontend-install frontend-build frontend-test frontend-lint
-.PHONY: cross-platform cross-platform-build ci ci-full help
+.PHONY: cross-platform cross-platform-build ci ci-full local-ci help
 
 # Go parameters
 GOCMD=go
@@ -53,10 +53,10 @@ test:
 # Run tests with coverage report
 test-coverage:
 	@echo "Running tests with coverage..."
-	@mkdir -p coverage/go
-	$(GOTEST) -v -race -coverpkg=./cmd/...,./internal/... -coverprofile=coverage/go/coverage.out $(GO_PACKAGES)
-	$(GOCMD) tool cover -html=coverage/go/coverage.out -o coverage/go/coverage.html
-	@echo "Coverage report generated: coverage/go/coverage.html"
+	@mkdir -p .tmp/coverage/go
+	$(GOTEST) -v -race -coverpkg=./cmd/...,./internal/... -coverprofile=.tmp/coverage/go/coverage.out $(GO_PACKAGES)
+	$(GOCMD) tool cover -html=.tmp/coverage/go/coverage.out -o .tmp/coverage/go/coverage.html
+	@echo "Coverage report generated: .tmp/coverage/go/coverage.html"
 
 # Run specific package tests
 test-unit:
@@ -72,7 +72,7 @@ clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
 	rm -rf $(BINARY_DIR)
-	rm -rf coverage/go
+	rm -rf .tmp/coverage/go
 	@echo "Cleaned!"
 
 # Run bridge CLI
@@ -175,6 +175,10 @@ dev: install fmt test frontend-install
 
 # CI pipeline (for GitHub Actions)
 ci: fmt lint-check test
+
+# Full local pre-release CI gate
+local-ci:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-ci.ps1
 
 # ============ Frontend Commands ============
 frontend: frontend-install frontend-build
