@@ -8,8 +8,9 @@ import { Card, CardContent, CardHeader } from '@/components/ui/Card'
 export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { login, logout } = useAuthStore()
+  const { login, useLocalTrusted } = useAuthStore()
   const [token, setToken] = useState('')
+  const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState('')
 
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/'
@@ -24,26 +25,55 @@ export default function Login() {
       return
     }
 
-    try {
-      const decoded = jwtDecode<{ user_id?: string; username?: string; roles?: string[] }>(trimmed)
-      login(
-        {
-          id: decoded.user_id || 'api-token',
-          name: decoded.username || 'API Token',
-          email: '',
-          role: decoded.roles?.[0] || 'viewer',
-        },
-        trimmed
-      )
-      navigate(from, { replace: true })
-    } catch {
-      setError('Invalid token format')
+    let user = {
+      id: 'api-token',
+      name: 'API Token',
+      email: 'token@bridgeos.local',
+      role: 'service',
     }
+
+    try {
+      const decoded = jwtDecode<{ user_id?: string; username?: string; email?: string; roles?: string[] }>(trimmed)
+      user = {
+        id: decoded.user_id || user.id,
+        name: decoded.username || user.name,
+        email: decoded.email || user.email,
+        role: decoded.roles?.[0] || user.role,
+      }
+    } catch {
+      // Opaque bearer tokens are accepted; the backend is the authority.
+    }
+
+    login(user, trimmed, 'bearer')
+    navigate(from, { replace: true })
+  }
+
+  const handleUseAPIKey = (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+
+    const trimmed = apiKey.trim()
+    if (!trimmed) {
+      setError('Enter an API key or continue in local trusted mode.')
+      return
+    }
+
+    login(
+      {
+        id: 'api-key',
+        name: 'API Key',
+        email: 'api-key@bridgeos.local',
+        role: 'service',
+      },
+      trimmed,
+      'api_key'
+    )
+    navigate(from, { replace: true })
   }
 
   const handleContinueTrusted = () => {
     setError('')
-    logout()
+    useLocalTrusted()
     navigate(from, { replace: true })
   }
 
@@ -85,6 +115,24 @@ export default function Login() {
               </div>
               <Button type='submit' variant='outline' className='w-full'>
                 Use Bearer Token
+              </Button>
+            </form>
+
+            <form onSubmit={handleUseAPIKey} className='space-y-3 border-t border-gray-200 dark:border-gray-700 pt-4'>
+              <div className='space-y-2'>
+                <label htmlFor='api-key' className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                  API Key
+                </label>
+                <input
+                  id='api-key'
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-800 dark:text-white'
+                  placeholder='Paste an X-API-Key value'
+                />
+              </div>
+              <Button type='submit' variant='outline' className='w-full'>
+                Use API Key
               </Button>
             </form>
 

@@ -17,7 +17,9 @@ vi.mock('axios', () => ({
 
 describe('api client', () => {
   beforeEach(() => {
+    vi.resetModules()
     vi.clearAllMocks()
+    sessionStorage.clear()
   })
 
   it('uses canonical resource routes', async () => {
@@ -64,5 +66,38 @@ describe('api client', () => {
     expect(cases.data?.items).toHaveLength(1)
     expect(events.data?.items).toHaveLength(1)
     expect(reports.data).toEqual([{ id: 'report-1', path: '/tmp/report.md' }])
+  })
+
+  it('sends bearer tokens from the shared auth store', async () => {
+    sessionStorage.setItem('auth_token', JSON.stringify({ mode: 'bearer', token: 'bearer-token', user: null }))
+
+    await import('./client')
+    const requestInterceptor = mockApi.interceptors.request.use.mock.calls[0][0]
+    const config = requestInterceptor({ headers: {} })
+
+    expect(config.headers.Authorization).toBe('Bearer bearer-token')
+    expect(config.headers['X-API-Key']).toBeUndefined()
+  })
+
+  it('sends API keys from the shared auth store', async () => {
+    sessionStorage.setItem('auth_token', JSON.stringify({ mode: 'api_key', token: 'service-key', user: null }))
+
+    await import('./client')
+    const requestInterceptor = mockApi.interceptors.request.use.mock.calls[0][0]
+    const config = requestInterceptor({ headers: {} })
+
+    expect(config.headers['X-API-Key']).toBe('service-key')
+    expect(config.headers.Authorization).toBeUndefined()
+  })
+
+  it('does not send credentials in local trusted mode', async () => {
+    sessionStorage.setItem('auth_token', JSON.stringify({ mode: 'local_trusted', token: null, user: null }))
+
+    await import('./client')
+    const requestInterceptor = mockApi.interceptors.request.use.mock.calls[0][0]
+    const config = requestInterceptor({ headers: {} })
+
+    expect(config.headers.Authorization).toBeUndefined()
+    expect(config.headers['X-API-Key']).toBeUndefined()
   })
 })

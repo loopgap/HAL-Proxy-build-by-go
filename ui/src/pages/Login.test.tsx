@@ -4,13 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Login from './Login'
 
 const loginMock = vi.fn()
-const logoutMock = vi.fn()
+const useLocalTrustedMock = vi.fn()
 const navigateMock = vi.fn()
 
 vi.mock('@/store', () => ({
   useAuthStore: () => ({
     login: loginMock,
-    logout: logoutMock,
+    useLocalTrusted: useLocalTrustedMock,
   }),
 }))
 
@@ -40,7 +40,7 @@ describe('Login', () => {
     expect(screen.getByText(/BRIDGEOS_LOCAL_TRUSTED=true/i)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Continue In Local Trusted Mode/i }))
 
-    expect(logoutMock).toHaveBeenCalled()
+    expect(useLocalTrustedMock).toHaveBeenCalled()
     expect(navigateMock).toHaveBeenCalledWith('/reports', { replace: true })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
@@ -60,8 +60,32 @@ describe('Login', () => {
     fireEvent.click(screen.getByRole('button', { name: /Use Bearer Token/i }))
 
     expect(loginMock).toHaveBeenCalledWith(
-      { id: 'api-token', name: 'API Token', email: 'token@bridgeos.local' },
-      'test-token'
+      { id: 'api-token', name: 'API Token', email: 'token@bridgeos.local', role: 'service' },
+      'test-token',
+      'bearer'
+    )
+    expect(navigateMock).toHaveBeenCalledWith('/reports', { replace: true })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('stores an API key without calling a login API', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>
+    )
+
+    fireEvent.change(screen.getByLabelText(/API Key/i), {
+      target: { value: 'dev-api-key' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Use API Key/i }))
+
+    expect(loginMock).toHaveBeenCalledWith(
+      { id: 'api-key', name: 'API Key', email: 'api-key@bridgeos.local', role: 'service' },
+      'dev-api-key',
+      'api_key'
     )
     expect(navigateMock).toHaveBeenCalledWith('/reports', { replace: true })
     expect(fetchSpy).not.toHaveBeenCalled()

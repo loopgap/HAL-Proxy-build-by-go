@@ -76,9 +76,9 @@ type RateLimitConfig struct {
 // CORSConfig holds CORS configuration
 type CORSConfig struct {
 	AllowedOrigins []string `json:"allowed_origins"`
-	AllowMethods  []string `json:"allow_methods"`
-	AllowHeaders  []string `json:"allow_headers"`
-	MaxAge        int      `json:"max_age"`
+	AllowMethods   []string `json:"allow_methods"`
+	AllowHeaders   []string `json:"allow_headers"`
+	MaxAge         int      `json:"max_age"`
 }
 
 func (c CORSConfig) Validate() error {
@@ -179,13 +179,13 @@ func Load(path string) (*Config, error) {
 	config := DefaultConfig()
 
 	if path == "" {
-		return config, nil
+		return finalize(config)
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return config, nil
+			return finalize(config)
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -200,14 +200,14 @@ func Load(path string) (*Config, error) {
 		parseConfigLine(config, line)
 	}
 
-	// Override with environment variables
-	config.applyEnvOverrides()
+	return finalize(config)
+}
 
-	// Validate configuration
+func finalize(config *Config) (*Config, error) {
+	config.applyEnvOverrides()
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-
 	return config, nil
 }
 
@@ -282,6 +282,18 @@ func parseConfigLine(config *Config, line string) {
 		}
 	case "auth.jwt_issuer":
 		config.Auth.JWTIssuer = value
+	case "auth.api_keys":
+		config.Auth.APIKeys = parseAPIKeys(value)
+	case "auth.trusted_proxies":
+		config.Auth.TrustedProxies = parseCSV(value)
+	case "auth.local_trusted":
+		if v, err := strconv.ParseBool(value); err == nil {
+			config.Auth.LocalTrusted = v
+		}
+	case "auth.local_trusted_user_id":
+		config.Auth.LocalTrustedUserID = value
+	case "auth.local_trusted_roles":
+		config.Auth.LocalTrustedRoles = parseCSV(value)
 	// RateLimit config
 	case "rate_limit.enabled":
 		if v, err := strconv.ParseBool(value); err == nil {

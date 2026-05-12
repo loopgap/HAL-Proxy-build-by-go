@@ -9,6 +9,7 @@ import type {
   CasesListResponse,
   CaseEventsResponse,
 } from '@/types'
+import { readStoredAuth } from '@/store'
 
 export interface RequestConfig extends AxiosRequestConfig {
   retries?: number
@@ -29,8 +30,11 @@ const api: AxiosInstance = axios.create({
 
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    const token = localStorage.getItem('auth_token')
-    if (token && config.headers) config.headers.Authorization = 'Bearer ' + token
+    const auth = readStoredAuth()
+    if (config.headers) {
+      if (auth.mode === 'bearer' && auth.token) config.headers.Authorization = 'Bearer ' + auth.token
+      if (auth.mode === 'api_key' && auth.token) config.headers['X-API-Key'] = auth.token
+    }
     config.headers['X-Request-Time'] = new Date().toISOString()
     config.headers['X-Request-ID'] = crypto.randomUUID()
     return config
@@ -47,7 +51,7 @@ api.interceptors.response.use(
       return Promise.reject({ message: 'Network error.', code: 'NETWORK_ERROR' })
     }
     const status = error.response.status
-    if (status === 401) { localStorage.removeItem('auth_token'); window.location.href = '/login' }
+    if (status === 401) { sessionStorage.removeItem('auth_token'); window.location.href = '/login' }
     if (status === 429 && originalRequest && shouldRetry(error)) { await delay(5000); return retryRequest(originalRequest) }
     if ((status === 500 || status === 502 || status === 503) && originalRequest && shouldRetry(error)) return retryRequest(originalRequest)
     const rawMessage = (error.response.data as { error?: string })?.error || error.message

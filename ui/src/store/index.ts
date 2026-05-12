@@ -8,49 +8,70 @@ interface User {
   role: string
 }
 
+export type AuthMode = 'local_trusted' | 'bearer' | 'api_key'
+
 interface AuthState {
   user: User | null
   token: string | null
+  mode: AuthMode | null
   isAuthenticated: boolean
-  login: (user: User, token: string) => void
+  login: (user: User, token: string, mode?: Extract<AuthMode, 'bearer' | 'api_key'>) => void
+  useLocalTrusted: () => void
   logout: () => void
   updateUser: (user: Partial<User>) => void
 }
 
-const getStoredToken = (): { user: User | null; token: string | null } => {
+export const readStoredAuth = (): { user: User | null; token: string | null; mode: AuthMode | null } => {
   try {
     const stored = sessionStorage.getItem('auth_token')
     if (stored) {
       const parsed = JSON.parse(stored)
-      return { user: parsed.user, token: parsed.token }
+      const mode = (parsed.mode ?? (parsed.token ? 'bearer' : null)) as AuthMode | null
+      return { user: parsed.user ?? null, token: parsed.token ?? null, mode }
     }
   } catch {
   }
-  return { user: null, token: null }
+  return { user: null, token: null, mode: null }
 }
 
-const initialAuth = getStoredToken()
+const localTrustedUser: User = {
+  id: 'local-agent',
+  name: 'Local Trusted',
+  email: 'local@bridgeos.local',
+  role: 'service',
+}
+
+const initialAuth = readStoredAuth()
 
 export const useAuthStore = create<AuthState>()(
   (set) => ({
     user: initialAuth.user,
     token: initialAuth.token,
-    isAuthenticated: initialAuth.token !== null,
-    login: (user, token) => {
-      const data = JSON.stringify({ user, token })
+    mode: initialAuth.mode,
+    isAuthenticated: initialAuth.mode === 'local_trusted' || initialAuth.token !== null,
+    login: (user, token, mode = 'bearer') => {
+      const data = JSON.stringify({ user, token, mode })
       try {
         sessionStorage.setItem('auth_token', data)
       } catch {
         console.warn('Failed to persist auth token - session storage may be unavailable')
       }
-      set({ user, token, isAuthenticated: token !== null })
+      set({ user, token, mode, isAuthenticated: token !== null })
+    },
+    useLocalTrusted: () => {
+      try {
+        sessionStorage.setItem('auth_token', JSON.stringify({ user: localTrustedUser, token: null, mode: 'local_trusted' }))
+      } catch {
+        console.warn('Failed to persist auth mode - session storage may be unavailable')
+      }
+      set({ user: localTrustedUser, token: null, mode: 'local_trusted', isAuthenticated: true })
     },
     logout: () => {
       try {
         sessionStorage.removeItem('auth_token')
       } catch {
       }
-      set({ user: null, token: null, isAuthenticated: false })
+      set({ user: null, token: null, mode: null, isAuthenticated: false })
     },
     updateUser: (updates) => set((state) => ({ user: state.user ? { ...state.user, ...updates } : null })),
   })

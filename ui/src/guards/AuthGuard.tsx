@@ -15,10 +15,10 @@ export function AuthGuard({
   requiredRoles = [],
   fallbackPath = '/login',
 }: GuardProps) {
-  const { user, token } = useAuthStore()
+  const { user, isAuthenticated } = useAuthStore()
   const location = useLocation()
 
-  if (requireAuth && !token) {
+  if (requireAuth && !isAuthenticated) {
     return <Navigate to={fallbackPath} state={{ from: location }} replace />
   }
 

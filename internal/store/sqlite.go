@@ -105,6 +105,7 @@ func (r *SQLiteRepository) Init(ctx context.Context) error {
 			reason TEXT,
 			decided_by TEXT,
 			decided_at TEXT,
+			version INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL
 		);`,
 		`CREATE TABLE IF NOT EXISTS reports (
@@ -278,7 +279,9 @@ func (r *SQLiteRepository) migrateReportsOwnerID(ctx context.Context) error {
 	}
 
 	if !hasOwnerID {
-		return nil
+		if _, err := r.db.ExecContext(ctx, `ALTER TABLE reports ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
 	}
 
 	// Populate owner_id for reports that have empty owner_id
@@ -452,7 +455,7 @@ func (r *SQLiteRepository) ListCases(ctx context.Context) ([]domain.CaseRecord, 
 	return out, rows.Err()
 }
 
-func (r *SQLiteRepository) ListCasesPaginated(ctx context.Context, cursor string, limit int) ([]domain.CaseRecord, string, bool, error) {
+func (r *SQLiteRepository) ListCasesPaginated(ctx context.Context, cursor string, limit int, ownerID string) ([]domain.CaseRecord, string, bool, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -460,8 +463,22 @@ func (r *SQLiteRepository) ListCasesPaginated(ctx context.Context, cursor string
 		limit = 100
 	}
 
-	query := `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases ORDER BY created_at DESC LIMIT ?`
-	args := []any{limit + 1} // Request one extra to check hasMore
+	query := `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases`
+	conditions := []string{}
+	args := []any{}
+	if ownerID != "" {
+		conditions = append(conditions, `owner_id = ?`)
+		args = append(args, ownerID)
+	}
+	if cursor != "" {
+		conditions = append(conditions, `created_at < ?`)
+		args = append(args, cursor)
+	}
+	if len(conditions) > 0 {
+		query += ` WHERE ` + strings.Join(conditions, ` AND `)
+	}
+	query += ` ORDER BY created_at DESC LIMIT ?`
+	args = append(args, limit+1) // Request one extra to check hasMore
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -471,13 +488,8 @@ func (r *SQLiteRepository) ListCasesPaginated(ctx context.Context, cursor string
 
 	var cases []domain.CaseRecord
 	for rows.Next() {
-		var c domain.CaseRecord
-		var specJSON string
-		err := rows.Scan(&c.ID, &c.OwnerID, &c.Title, &c.Status, &specJSON, &c.NextCommand, &c.Version, &c.CreatedAt, &c.UpdatedAt)
+		c, err := scanCase(rows)
 		if err != nil {
-			return nil, "", false, err
-		}
-		if err := json.Unmarshal([]byte(specJSON), &c.Spec); err != nil {
 			return nil, "", false, err
 		}
 		cases = append(cases, c)
@@ -582,7 +594,7 @@ func (r *SQLiteRepository) CreateOrGetPendingApproval(ctx context.Context, a dom
 	// Use INSERT ... ON CONFLICT to atomically handle race condition
 	now := time.Now().UTC()
 
-	_, err := r.db.ExecContext(ctx, `
+	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO approvals (id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at)
 		VALUES (?, ?, ?, ?, ?, 'pending', '', '', NULL, ?)
 		ON CONFLICT(case_id, command_index) DO UPDATE SET
@@ -590,29 +602,24 @@ func (r *SQLiteRepository) CreateOrGetPendingApproval(ctx context.Context, a dom
 				WHEN approvals.status = 'pending' THEN 'pending' 
 				ELSE approvals.status 
 			END
-		RETURNING id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at`,
+		RETURNING id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at`,
 		a.ID, a.CaseID, a.CommandIndex, a.CommandName, string(a.RiskClass), now)
 
-	if err != nil {
-		return domain.Approval{}, fmt.Errorf("create approval: %w", err)
-	}
-
-	// Fetch the approval to return it
-	return r.GetApproval(ctx, a.ID)
+	return scanApproval(row)
 }
 
 func (r *SQLiteRepository) GetApproval(ctx context.Context, id string) (domain.Approval, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at FROM approvals WHERE id = ?`, id)
+	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at FROM approvals WHERE id = ?`, id)
 	return scanApproval(row)
 }
 
 func (r *SQLiteRepository) FindApprovalByCommand(ctx context.Context, caseID string, commandIndex int) (domain.Approval, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at FROM approvals WHERE case_id = ? AND command_index = ? ORDER BY created_at DESC LIMIT 1`, caseID, commandIndex)
+	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at FROM approvals WHERE case_id = ? AND command_index = ? ORDER BY created_at DESC LIMIT 1`, caseID, commandIndex)
 	return scanApproval(row)
 }
 
 func (r *SQLiteRepository) ListApprovals(ctx context.Context, caseID string) ([]domain.Approval, error) {
-	query := `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at FROM approvals`
+	query := `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at FROM approvals`
 	var args []any
 	if caseID != "" {
 		query += ` WHERE case_id = ?`
@@ -722,12 +729,25 @@ func (r *SQLiteRepository) ListReports(ctx context.Context, caseID string, owner
 }
 
 func (r *SQLiteRepository) GetReport(ctx context.Context, id string, ownerID string) (domain.ReportSummary, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports WHERE id = ?`, id)
+	query := `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports WHERE id = ?`
+	args := []any{id}
+	if ownerID != "" {
+		query += ` AND owner_id = ?`
+		args = append(args, ownerID)
+	}
+	row := r.db.QueryRowContext(ctx, query, args...)
 	return scanReport(row)
 }
 
 func (r *SQLiteRepository) GetLatestReport(ctx context.Context, caseID string, ownerID string) (domain.ReportSummary, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports WHERE case_id = ? ORDER BY created_at DESC LIMIT 1`, caseID)
+	query := `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports WHERE case_id = ?`
+	args := []any{caseID}
+	if ownerID != "" {
+		query += ` AND owner_id = ?`
+		args = append(args, ownerID)
+	}
+	query += ` ORDER BY created_at DESC LIMIT 1`
+	row := r.db.QueryRowContext(ctx, query, args...)
 	return scanReport(row)
 }
 
@@ -805,7 +825,7 @@ func scanApproval(s scanner) (domain.Approval, error) {
 	var status string
 	var decidedAt sql.NullString
 	var createdAt string
-	if err := s.Scan(&a.ID, &a.CaseID, &a.CommandIndex, &a.CommandName, &risk, &status, &a.Reason, &a.DecidedBy, &decidedAt, &createdAt); err != nil {
+	if err := s.Scan(&a.ID, &a.CaseID, &a.CommandIndex, &a.CommandName, &risk, &status, &a.Reason, &a.DecidedBy, &decidedAt, &a.Version, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Approval{}, ErrNotFound
 		}
@@ -924,7 +944,7 @@ func (r *SQLiteRepository) FindApprovalByCommandInTx(ctx context.Context, tx Tx,
 		return domain.Approval{}, fmt.Errorf("invalid transaction type")
 	}
 
-	row := wrapper.tx.QueryRowContext(ctx, `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at FROM approvals WHERE case_id = ? AND command_index = ? ORDER BY created_at DESC LIMIT 1`, caseID, commandIndex)
+	row := wrapper.tx.QueryRowContext(ctx, `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at FROM approvals WHERE case_id = ? AND command_index = ? ORDER BY created_at DESC LIMIT 1`, caseID, commandIndex)
 	return scanApproval(row)
 }
 
@@ -945,7 +965,7 @@ func (r *SQLiteRepository) CreateOrGetPendingApprovalInTx(ctx context.Context, t
 				WHEN approvals.status = 'pending' THEN 'pending' 
 				ELSE approvals.status 
 			END
-		RETURNING id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at`,
+		RETURNING id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at`,
 		a.ID, a.CaseID, a.CommandIndex, a.CommandName, string(a.RiskClass), now)
 
 	return scanApproval(row)

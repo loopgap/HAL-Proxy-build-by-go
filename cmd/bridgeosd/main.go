@@ -67,6 +67,7 @@ func main() {
 		cfg.Auth.LocalTrusted,
 		cfg.Auth.LocalTrustedUserID,
 		cfg.Auth.LocalTrustedRoles,
+		cfg.Auth.APIKeys,
 		rateLimiter,
 		middleware.CORSConfig{
 			AllowOrigins: cfg.CORS.AllowedOrigins,

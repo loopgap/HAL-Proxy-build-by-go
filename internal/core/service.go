@@ -68,21 +68,7 @@ func (s *Service) ListCases(ctx context.Context, ownerID string) ([]domain.CaseR
 }
 
 func (s *Service) ListCasesPaginated(ctx context.Context, cursor string, limit int, ownerID string) ([]domain.CaseRecord, string, bool, error) {
-	cases, nextCursor, hasMore, err := s.repo.ListCasesPaginated(ctx, cursor, limit)
-	if err != nil {
-		return nil, "", false, err
-	}
-	// Filter by owner if specified
-	if ownerID != "" {
-		filtered := make([]domain.CaseRecord, 0, len(cases))
-		for _, c := range cases {
-			if c.OwnerID == ownerID {
-				filtered = append(filtered, c)
-			}
-		}
-		return filtered, nextCursor, len(filtered) < len(cases), nil
-	}
-	return cases, nextCursor, hasMore, nil
+	return s.repo.ListCasesPaginated(ctx, cursor, limit, ownerID)
 }
 
 func (s *Service) CreateCase(ctx context.Context, spec domain.CaseSpec, actor string) (domain.CaseRecord, error) {

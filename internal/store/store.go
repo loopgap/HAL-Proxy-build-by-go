@@ -27,7 +27,7 @@ type Repository interface {
 	GetCase(context.Context, string) (domain.CaseRecord, error)
 	GetCaseWithRelations(context.Context, string) (domain.CaseWithRelations, error)
 	ListCases(context.Context) ([]domain.CaseRecord, error)
-	ListCasesPaginated(ctx context.Context, cursor string, limit int) ([]domain.CaseRecord, string, bool, error)
+	ListCasesPaginated(ctx context.Context, cursor string, limit int, ownerID string) ([]domain.CaseRecord, string, bool, error)
 	AppendEvent(context.Context, domain.EventEnvelope) (domain.EventEnvelope, error)
 	ListEvents(context.Context, string) ([]domain.EventEnvelope, error)
 	ListEventsPaginated(ctx context.Context, caseID string, limit, offset int) ([]domain.EventEnvelope, int, error)

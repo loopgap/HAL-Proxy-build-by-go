@@ -1,9 +1,6 @@
 package config
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
@@ -19,16 +16,47 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestConfig_EnvOverrides(t *testing.T) {
-	os.Setenv("HAL_PROXY_ADDR", ":9090")
-	os.Setenv("HAL_PROXY_DB", "custom.db")
-	defer os.Unsetenv("HAL_PROXY_ADDR")
-	defer os.Unsetenv("HAL_PROXY_DB")
+	t.Setenv("BRIDGEOS_ADDR", "")
+	t.Setenv("BRIDGEOS_DB", "")
+	t.Setenv("HAL_PROXY_ADDR", ":9090")
+	t.Setenv("HAL_PROXY_DB", "custom.db")
 	cfg := DefaultConfig()
 	if cfg.Server.Address != ":9090" {
 		t.Errorf("Expected :9090, got %s", cfg.Server.Address)
 	}
 	if cfg.Database.Path != "custom.db" {
 		t.Errorf("Expected custom.db, got %s", cfg.Database.Path)
+	}
+}
+
+func TestLoadValidatesDefaultSecret(t *testing.T) {
+	t.Setenv("BRIDGEOS_JWT_SECRET", "")
+	t.Setenv("HAL_PROXY_JWT_SECRET", "")
+
+	_, err := Load("")
+	if err == nil {
+		t.Fatal("expected Load with default placeholder JWT secret to fail")
+	}
+}
+
+func TestLoadAppliesEnvOverridesWithoutConfigFile(t *testing.T) {
+	t.Setenv("BRIDGEOS_JWT_SECRET", "env-secret-for-load-test-32-characters")
+	t.Setenv("BRIDGEOS_ADDR", ":9191")
+	t.Setenv("BRIDGEOS_DB", "env.db")
+	t.Setenv("BRIDGEOS_LOCAL_TRUSTED", "true")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Server.Address != ":9191" {
+		t.Fatalf("expected env address, got %s", cfg.Server.Address)
+	}
+	if cfg.Database.Path != "env.db" {
+		t.Fatalf("expected env db, got %s", cfg.Database.Path)
+	}
+	if !cfg.Auth.LocalTrusted {
+		t.Fatal("expected local trusted env override")
 	}
 }
 

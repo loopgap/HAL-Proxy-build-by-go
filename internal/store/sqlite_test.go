@@ -729,3 +729,127 @@ func TestFindApprovalByCommand(t *testing.T) {
 		t.Errorf("Expected ErrNotFound for non-existent approval, got %v", err)
 	}
 }
+
+func TestMigrateOldReportsAddsOwnerID(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "bridgeos-migration-reports-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	repo, err := NewSQLiteRepository(tmpFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	now := time.Now().UTC().Format(timestampFormat)
+	_, err = repo.DB().Exec(`
+		CREATE TABLE cases (
+			id TEXT PRIMARY KEY,
+			owner_id TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL,
+			status TEXT NOT NULL,
+			spec_json TEXT NOT NULL,
+			next_command INTEGER NOT NULL,
+			version INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.DB().Exec(`
+		CREATE TABLE reports (
+			id TEXT PRIMARY KEY,
+			case_id TEXT NOT NULL,
+			path TEXT NOT NULL,
+			command_count INTEGER NOT NULL,
+			event_count INTEGER NOT NULL,
+			created_at TEXT NOT NULL
+		);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.DB().Exec(`
+		INSERT INTO cases (id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at)
+		VALUES ('case-old-report', 'owner-a', 'Old Report Case', 'completed', '{"title":"Old Report Case"}', 0, 0, ?, ?);`, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.DB().Exec(`
+		INSERT INTO reports (id, case_id, path, command_count, event_count, created_at)
+		VALUES ('report-old-schema', 'case-old-report', '/tmp/report.md', 1, 2, ?);`, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := repo.GetReport(context.Background(), "report-old-schema", "owner-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OwnerID != "owner-a" {
+		t.Fatalf("expected migrated report owner owner-a, got %q", report.OwnerID)
+	}
+}
+
+func TestMigrateOldApprovalsAddsVersion(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "bridgeos-migration-approvals-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	repo, err := NewSQLiteRepository(tmpFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	now := time.Now().UTC().Format(timestampFormat)
+	_, err = repo.DB().Exec(`
+		CREATE TABLE approvals (
+			id TEXT PRIMARY KEY,
+			case_id TEXT NOT NULL,
+			command_index INTEGER NOT NULL,
+			command_name TEXT NOT NULL,
+			risk_class TEXT NOT NULL,
+			status TEXT NOT NULL,
+			reason TEXT,
+			decided_by TEXT,
+			decided_at TEXT,
+			created_at TEXT NOT NULL
+		);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.DB().Exec(`
+		INSERT INTO approvals (id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, created_at)
+		VALUES ('approval-old-schema', 'case-1', 0, 'reset', 'destructive', 'pending', '', '', NULL, ?);`, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	approval, err := repo.GetApproval(context.Background(), "approval-old-schema")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.Version != 0 {
+		t.Fatalf("expected migrated approval version 0, got %d", approval.Version)
+	}
+	approval.Status = domain.ApprovalApproved
+	approval.Version++
+	if err := repo.UpdateApproval(context.Background(), approval); err != nil {
+		t.Fatalf("expected migrated approval to update with optimistic lock, got %v", err)
+	}
+}

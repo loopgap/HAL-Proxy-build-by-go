@@ -27,9 +27,12 @@ log.output=stdout
 log.file_path=
 
 # 认证配置
-auth.jwt_secret=your-secret-key-here
+auth.jwt_secret=replace-with-secure-secret-at-least-32-chars
 auth.jwt_expiry_hours=24
 auth.jwt_issuer=bridgeos
+auth.api_keys=
+auth.local_trusted_user_id=local-agent
+auth.local_trusted_roles=service
 auth.local_trusted=true
 
 # 限流配置

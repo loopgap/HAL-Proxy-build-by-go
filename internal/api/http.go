@@ -48,6 +48,7 @@ type Server struct {
 	localRoles     []string
 	rateLimiter    *middleware.RateLimiter
 	corsConfig     middleware.CORSConfig
+	apiKeys        map[string]string
 }
 
 type healthChecker interface {
@@ -60,7 +61,7 @@ type tokenRevocationStore interface {
 }
 
 // NewServer creates a new API server instance
-func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRevocationStore, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string, localTrusted bool, localActor string, localRoles []string, rateLimiter *middleware.RateLimiter, corsConfig middleware.CORSConfig) *Server {
+func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRevocationStore, jwtSecret string, jwtExpiryHours int, jwtIssuer string, trustedProxies []string, localTrusted bool, localActor string, localRoles []string, apiKeys map[string]string, rateLimiter *middleware.RateLimiter, corsConfig middleware.CORSConfig) *Server {
 	jwtConfig := middleware.JWTConfig{
 		Secret:          jwtSecret,
 		ExpirationHours: jwtExpiryHours,
@@ -89,6 +90,7 @@ func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRe
 		localRoles:     localRoles,
 		rateLimiter:    rateLimiter,
 		corsConfig:     corsConfig,
+		apiKeys:        apiKeys,
 	}
 }
 
@@ -101,15 +103,11 @@ func (s *Server) SetAuthMiddleware(middleware func(http.Handler) http.Handler) {
 func (s *Server) Handler() http.Handler {
 	var root http.Handler = http.HandlerFunc(s.route)
 
-	root = middleware.CORS(s.corsConfig)(root)
-
-	if s.authMiddleware != nil {
-		root = s.authMiddleware(root)
-	}
-
 	if s.rateLimiter != nil {
 		root = middleware.RateLimit(s.rateLimiter, s.trustedProxies)(root)
 	}
+
+	root = middleware.CORS(s.corsConfig)(root)
 
 	return root
 }
@@ -209,6 +207,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		if s.shouldTrustLocalRequest(r) {
 			r = s.withTrustedLocalClaims(r)
 			s.routeInternal(w, r)
+		} else if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+			if trusted, ok := s.withAPIKeyClaims(r, apiKey); ok {
+				s.routeInternal(w, trusted)
+			} else {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_api_key"})
+			}
 		} else {
 			authHandler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				s.routeInternal(w, r)
@@ -274,6 +278,29 @@ func (s *Server) withTrustedLocalClaims(r *http.Request) *http.Request {
 		Roles:    roles,
 	}
 	return r.WithContext(middleware.ContextWithClaims(r.Context(), claims))
+}
+
+func (s *Server) withAPIKeyClaims(r *http.Request, apiKey string) (*http.Request, bool) {
+	service, ok := s.apiKeys[apiKey]
+	if !ok || strings.TrimSpace(service) == "" {
+		return r, false
+	}
+	claims := &middleware.Claims{
+		UserID:   service,
+		Username: service,
+		Roles:    []string{"service"},
+	}
+	return r.WithContext(middleware.ContextWithClaims(r.Context(), claims)), true
+}
+
+func (s *Server) authorizeCaseRead(ctx context.Context, caseID string) (domain.CaseRecord, bool, error) {
+	userID := middleware.GetUserIDFromContext(ctx)
+	claims, _ := middleware.GetClaimsFromContext(ctx)
+	c, err := s.svc.GetCase(ctx, caseID, "")
+	if err != nil {
+		return domain.CaseRecord{}, false, err
+	}
+	return c, c.OwnerID == userID || middleware.HasRole(claims, "admin"), nil
 }
 
 func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
@@ -505,6 +532,13 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
+	if _, allowed, err := s.authorizeCaseRead(r.Context(), id); err != nil {
+		writeError(w, err)
+		return
+	} else if !allowed {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "message": "You do not have permission to view events for this case"})
+		return
+	}
 
 	// Parse pagination params
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -544,7 +578,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
 	if caseID != "" {
-		c, err := s.svc.GetCase(r.Context(), caseID, userID)
+		c, err := s.svc.GetCase(r.Context(), caseID, "")
 		if err != nil {
 			writeError(w, err)
 			return
@@ -609,7 +643,20 @@ func (s *Server) handleBuildReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := middleware.GetUserIDFromContext(r.Context())
-	report, err := s.svc.BuildReport(r.Context(), caseID, userID)
+	c, allowed, err := s.authorizeCaseRead(r.Context(), caseID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !allowed {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "message": "You do not have permission to build a report for this case"})
+		return
+	}
+	reportOwner := userID
+	if c.OwnerID != userID {
+		reportOwner = c.OwnerID
+	}
+	report, err := s.svc.BuildReport(r.Context(), caseID, reportOwner)
 	if err != nil {
 		writeError(w, err)
 		return
