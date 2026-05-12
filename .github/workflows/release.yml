@@ -39,15 +39,18 @@ jobs:
           VERSION: ${{ steps.tag.outputs.VERSION }}
         run: |
           mkdir -p release
-          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-linux-amd64 ./cmd/bridgeosd
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-darwin-amd64 ./cmd/bridgeosd
-          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-darwin-arm64 ./cmd/bridgeosd
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$VERSION" -o release/bridgeosd-windows-amd64.exe ./cmd/bridgeosd
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-s -w -X bridgeos/internal/version.Version=$VERSION -X bridgeos/internal/version.Commit=${GITHUB_SHA} -X bridgeos/internal/version.BuildDate=$BUILD_DATE"
+          GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o release/bridgeosd-linux-amd64 ./cmd/bridgeosd
+          GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o release/bridgeosd-darwin-amd64 ./cmd/bridgeosd
+          GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o release/bridgeosd-darwin-arm64 ./cmd/bridgeosd
+          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o release/bridgeosd-windows-amd64.exe ./cmd/bridgeosd
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: release/*
+          body_path: docs/releases/${{ github.ref_name }}.md
           generate_release_notes: true
           make_latest: true
         env:

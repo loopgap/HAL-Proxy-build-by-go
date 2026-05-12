@@ -16,7 +16,7 @@ database.max_idle_conns=5
 
 # 应用配置
 app.name=BridgeOS
-app.version=0.2.3
+app.version=0.4.3
 app.environment=development
 app.artifacts_dir=artifacts
 

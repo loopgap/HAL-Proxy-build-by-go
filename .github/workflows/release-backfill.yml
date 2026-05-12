@@ -1,21 +1,18 @@
 name: Release Backfill
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       tag:
-        description: Historical tag to backfill
+        description: Tag to backfill if the normal release workflow did not create it
         required: true
-        default: v0.1.0
+        default: v0.4.3
 
 permissions:
   contents: write
 
 env:
-  TARGET_TAG: ${{ github.event.inputs.tag || 'v0.1.0' }}
+  TARGET_TAG: ${{ github.event.inputs.tag || 'v0.4.3' }}
 
 jobs:
   backfill:
@@ -59,6 +56,7 @@ jobs:
               ? fs.readFileSync(notesPath, 'utf8')
               : `Historical release backfill for ${tag}.`;
 
+            const historicalBackfill = tag === 'v0.1.0';
             const release = await github.rest.repos.createRelease({
               owner,
               repo,
@@ -66,7 +64,7 @@ jobs:
               name: `BridgeOS ${tag}`,
               body,
               draft: false,
-              prerelease: true,
-              make_latest: 'false',
+              prerelease: historicalBackfill,
+              make_latest: historicalBackfill ? 'false' : 'true',
             });
             core.notice(`Created release ${release.data.html_url}`);

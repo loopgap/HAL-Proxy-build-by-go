@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$Tag = 'v0.1.0',
+    [string]$Tag = 'v0.4.3',
     [string]$Remote = 'origin',
     [string]$ExpectedPushUrl = 'https://github.com/loopgap/HAL-Proxy-build-by-go.git',
-    [string]$ExpectedCommitPrefix = '31820ca'
+    [string]$ExpectedCommitPrefix = ''
 )
 
 Set-StrictMode -Version Latest
@@ -89,8 +89,14 @@ Assert-Step "Local tag $Tag is annotated" {
         throw "Expected $Tag to be an annotated tag object, got $type"
     }
     $commit = Get-GitOutput @('rev-parse', "$Tag^{}")
-    if (-not $commit.StartsWith($ExpectedCommitPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($ExpectedCommitPrefix -and -not $commit.StartsWith($ExpectedCommitPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Expected $Tag to resolve to $ExpectedCommitPrefix..., got $commit"
+    }
+    if (-not $ExpectedCommitPrefix) {
+        $head = Get-GitOutput @('rev-parse', 'HEAD')
+        if ($commit -ne $head) {
+            throw "Expected $Tag to resolve to current HEAD $head, got $commit"
+        }
     }
 }
 

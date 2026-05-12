@@ -18,7 +18,7 @@ Returns:
 {
   "status": "healthy",
   "name": "BridgeOS",
-  "version": "0.2.3"
+  "version": "0.4.3"
 }
 ```
 

@@ -7,7 +7,7 @@ Current repository state:
 - product name: `BridgeOS`
 - CLI binary: `bridge`
 - daemon binary: `bridgeosd`
-- default version line: pre-v1 (`0.2.3`)
+- default version line: pre-v1 (`0.4.3`)
 - API shape: local-first HTTP API with structured JSON responses
 
 ## Current Capabilities
