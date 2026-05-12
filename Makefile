@@ -53,9 +53,10 @@ test:
 # Run tests with coverage report
 test-coverage:
 	@echo "Running tests with coverage..."
-	$(GOTEST) -v -race -coverprofile=coverage.out $(GO_PACKAGES)
-	$(GOCMD) tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
+	@mkdir -p coverage/go
+	$(GOTEST) -v -race -coverpkg=./cmd/...,./internal/... -coverprofile=coverage/go/coverage.out $(GO_PACKAGES)
+	$(GOCMD) tool cover -html=coverage/go/coverage.out -o coverage/go/coverage.html
+	@echo "Coverage report generated: coverage/go/coverage.html"
 
 # Run specific package tests
 test-unit:
@@ -71,7 +72,7 @@ clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
 	rm -rf $(BINARY_DIR)
-	rm -f coverage.out coverage.html
+	rm -rf coverage/go
 	@echo "Cleaned!"
 
 # Run bridge CLI
@@ -86,7 +87,8 @@ bridgeosd: build-bridgeosd
 
 # Development server
 run-hal-proxyd:
-	BRIDGEOS_DB=./data/bridgeos.db BRIDGEOS_ADDR=:8080 $(GOCMD) run ./cmd/bridgeosd
+	@mkdir -p data
+	BRIDGEOS_JWT_SECRET=dev-only-local-secret-for-bridgeos-32chars BRIDGEOS_LOCAL_TRUSTED=true BRIDGEOS_DB=./data/bridgeos.db BRIDGEOS_ADDR=:8080 $(GOCMD) run ./cmd/bridgeosd
 
 # Install dependencies
 install:

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 
@@ -23,204 +24,255 @@ func isValidActor(actor string) bool {
 }
 
 func main() {
+	os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
+}
+
+func run(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	ctx := context.Background()
-	repo, err := store.NewSQLiteRepository(dbPath())
-	exitOnErr(err)
+	repo, err := store.NewSQLiteRepository(dbPath(getenv))
+	if err != nil {
+		return exitOnErr(stderr, err)
+	}
 	defer repo.Close()
 
 	svc := core.NewService(repo, "artifacts")
-	exitOnErr(svc.Init(ctx))
-
-	args := os.Args[1:]
+	if err := svc.Init(ctx); err != nil {
+		return exitOnErr(stderr, err)
+	}
 	if len(args) == 0 {
-		fatalf("usage: bridge <case|approval|report|device|session|version> ...")
+		return fatalf(stderr, "usage: bridge <case|approval|report|device|session|version> ...")
 	}
 
 	switch args[0] {
 	case "case":
-		handleCase(ctx, svc, args[1:])
+		return handleCase(ctx, svc, stdout, stderr, args[1:])
 	case "approval":
-		handleApproval(ctx, svc, args[1:])
+		return handleApproval(ctx, svc, stdout, stderr, args[1:])
 	case "report":
-		handleReport(ctx, svc, args[1:])
+		return handleReport(ctx, svc, stdout, stderr, args[1:])
 	case "device":
-		handleDevice(ctx, svc, args[1:])
+		return handleDevice(ctx, svc, stdout, stderr, args[1:])
 	case "session":
-		handleSession(ctx, svc, args[1:])
+		return handleSession(ctx, svc, stdout, stderr, args[1:])
 	case "version":
-		writeJSON(map[string]any{
+		return writeJSON(stdout, stderr, map[string]any{
 			"name":       version.AppName,
 			"version":    version.Version,
 			"commit":     version.Commit,
 			"build_date": version.BuildDate,
 		})
 	default:
-		fatalf("unknown command %q", args[0])
+		return fatalf(stderr, "unknown command %q", args[0])
 	}
 }
 
-func handleCase(ctx context.Context, svc *core.Service, args []string) {
+func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	return fs
+}
+
+func handleCase(ctx context.Context, svc *core.Service, stdout, stderr io.Writer, args []string) int {
 	if len(args) == 0 {
-		fatalf("usage: bridge case <new|run|show|events>")
+		return fatalf(stderr, "usage: bridge case <new|run|show|events>")
 	}
 
 	switch args[0] {
 	case "new":
-		fs := flag.NewFlagSet("case new", flag.ExitOnError)
+		fs := newFlagSet("case new", stderr)
 		specPath := fs.String("spec", "", "path to case spec json")
 		actor := fs.String("actor", "cli", "actor name")
-		_ = fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
 		if *specPath == "" {
-			fatalf("--spec is required")
+			return fatalf(stderr, "--spec is required")
 		}
 		if !isValidActor(*actor) {
-			fatalf("invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
+			return fatalf(stderr, "invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
 		}
 		var spec domain.CaseSpec
 		raw, err := os.ReadFile(*specPath)
-		exitOnErr(err)
-		exitOnErr(json.Unmarshal(raw, &spec))
+		if err != nil {
+			return exitOnErr(stderr, err)
+		}
+		if err := json.Unmarshal(raw, &spec); err != nil {
+			return exitOnErr(stderr, err)
+		}
 		c, err := svc.CreateCase(ctx, spec, *actor)
-		exitOnErr(err)
-		writeJSON(c)
+		if err != nil {
+			return exitOnErr(stderr, err)
+		}
+		return writeJSON(stdout, stderr, c)
 	case "run":
-		fs := flag.NewFlagSet("case run", flag.ExitOnError)
+		fs := newFlagSet("case run", stderr)
 		id := fs.String("id", "", "case id")
 		actor := fs.String("actor", "cli", "actor name")
-		_ = fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
 		if *id == "" {
-			fatalf("--id is required")
+			return fatalf(stderr, "--id is required")
 		}
 		if !isValidActor(*actor) {
-			fatalf("invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
+			return fatalf(stderr, "invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
 		}
 		result, err := svc.RunCase(ctx, *id, *actor)
-		exitOnErr(err)
-		writeJSON(result)
+		if err != nil {
+			return exitOnErr(stderr, err)
+		}
+		return writeJSON(stdout, stderr, result)
 	case "show":
-		fs := flag.NewFlagSet("case show", flag.ExitOnError)
+		fs := newFlagSet("case show", stderr)
 		id := fs.String("id", "", "case id")
 		actor := fs.String("actor", "cli", "actor name")
-		_ = fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
 		if *id == "" {
-			fatalf("--id is required")
+			return fatalf(stderr, "--id is required")
 		}
 		if !isValidActor(*actor) {
-			fatalf("invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
+			return fatalf(stderr, "invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
 		}
 		c, err := svc.GetCase(ctx, *id, *actor)
-		exitOnErr(err)
-		writeJSON(c)
+		if err != nil {
+			return exitOnErr(stderr, err)
+		}
+		return writeJSON(stdout, stderr, c)
 	case "events":
-		fs := flag.NewFlagSet("case events", flag.ExitOnError)
+		fs := newFlagSet("case events", stderr)
 		id := fs.String("id", "", "case id")
-		_ = fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
 		if *id == "" {
-			fatalf("--id is required")
+			return fatalf(stderr, "--id is required")
 		}
 		events, err := svc.ListEvents(ctx, *id)
-		exitOnErr(err)
-		writeJSON(events)
+		if err != nil {
+			return exitOnErr(stderr, err)
+		}
+		return writeJSON(stdout, stderr, events)
 	default:
-		fatalf("unknown case command %q", args[0])
+		return fatalf(stderr, "unknown case command %q", args[0])
 	}
 }
 
-func handleApproval(ctx context.Context, svc *core.Service, args []string) {
+func handleApproval(ctx context.Context, svc *core.Service, stdout, stderr io.Writer, args []string) int {
 	// NOTE: Approving/rejecting approvals requires the user to have
 	// either "admin" or "approver" role in their JWT claims.
 	// Users without these roles will receive a 403 Forbidden response.
 	if len(args) == 0 {
-		fatalf("usage: bridge approval <ls|approve|reject>")
+		return fatalf(stderr, "usage: bridge approval <ls|approve|reject>")
 	}
 
 	switch args[0] {
 	case "ls":
-		fs := flag.NewFlagSet("approval ls", flag.ExitOnError)
+		fs := newFlagSet("approval ls", stderr)
 		caseID := fs.String("case-id", "", "optional case id")
-		_ = fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
 		approvals, err := svc.ListApprovals(ctx, *caseID)
-		exitOnErr(err)
-		writeJSON(approvals)
+		if err != nil {
+			return exitOnErr(stderr, err)
+		}
+		return writeJSON(stdout, stderr, approvals)
 	case "approve", "reject":
-		fs := flag.NewFlagSet("approval "+args[0], flag.ExitOnError)
+		fs := newFlagSet("approval "+args[0], stderr)
 		id := fs.String("id", "", "approval id")
 		actor := fs.String("actor", "cli", "actor name")
 		reason := fs.String("reason", "", "optional reason")
-		_ = fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
 		if *id == "" {
-			fatalf("--id is required")
+			return fatalf(stderr, "--id is required")
 		}
 		if !isValidActor(*actor) {
-			fatalf("invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
+			return fatalf(stderr, "invalid actor name %q: must be 1-64 chars, alphanumeric with _-", *actor)
 		}
 		approval, err := svc.ResolveApproval(ctx, *id, *actor, args[0], *reason)
-		exitOnErr(err)
-		writeJSON(approval)
+		if err != nil {
+			return exitOnErr(stderr, err)
+		}
+		return writeJSON(stdout, stderr, approval)
 	default:
-		fatalf("unknown approval command %q", args[0])
+		return fatalf(stderr, "unknown approval command %q", args[0])
 	}
 }
 
-func handleReport(ctx context.Context, svc *core.Service, args []string) {
+func handleReport(ctx context.Context, svc *core.Service, stdout, stderr io.Writer, args []string) int {
 	if len(args) == 0 || args[0] != "build" {
-		fatalf("usage: bridge report build --id <case-id>")
+		return fatalf(stderr, "usage: bridge report build --id <case-id>")
 	}
-	fs := flag.NewFlagSet("report build", flag.ExitOnError)
+	fs := newFlagSet("report build", stderr)
 	id := fs.String("id", "", "case id")
-	_ = fs.Parse(args[1:])
+	if err := fs.Parse(args[1:]); err != nil {
+		return 1
+	}
 	if *id == "" {
-		fatalf("--id is required")
+		return fatalf(stderr, "--id is required")
 	}
 	report, err := svc.BuildReport(ctx, *id, "")
-	exitOnErr(err)
-	writeJSON(report)
+	if err != nil {
+		return exitOnErr(stderr, err)
+	}
+	return writeJSON(stdout, stderr, report)
 }
 
-func handleDevice(ctx context.Context, svc *core.Service, args []string) {
+func handleDevice(ctx context.Context, svc *core.Service, stdout, stderr io.Writer, args []string) int {
 	if len(args) == 0 || args[0] != "ls" {
-		fatalf("usage: bridge device ls")
+		return fatalf(stderr, "usage: bridge device ls")
 	}
 	devices, err := svc.ListDevices(ctx)
-	exitOnErr(err)
-	writeJSON(devices)
+	if err != nil {
+		return exitOnErr(stderr, err)
+	}
+	return writeJSON(stdout, stderr, devices)
 }
 
-func handleSession(ctx context.Context, svc *core.Service, args []string) {
+func handleSession(ctx context.Context, svc *core.Service, stdout, stderr io.Writer, args []string) int {
 	if len(args) == 0 || args[0] != "ls" {
-		fatalf("usage: bridge session ls")
+		return fatalf(stderr, "usage: bridge session ls")
 	}
 	sessions, err := svc.ListSessions(ctx)
-	exitOnErr(err)
-	writeJSON(sessions)
+	if err != nil {
+		return exitOnErr(stderr, err)
+	}
+	return writeJSON(stdout, stderr, sessions)
 }
 
-func dbPath() string {
-	if env := os.Getenv("BRIDGEOS_DB"); env != "" {
+func dbPath(getenv func(string) string) string {
+	if env := getenv("BRIDGEOS_DB"); env != "" {
 		return env
 	}
-	if env := os.Getenv("HAL_PROXY_DB"); env != "" {
+	if env := getenv("HAL_PROXY_DB"); env != "" {
 		return env
 	}
 	return "bridgeos.db"
 }
 
-func writeJSON(v any) {
-	enc := json.NewEncoder(os.Stdout)
+func writeJSON(stdout, stderr io.Writer, v any) int {
+	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
-	exitOnErr(enc.Encode(v))
-}
-
-func fatalf(format string, args ...any) {
-	_, _ = fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(1)
-}
-
-func exitOnErr(err error) {
-	if err == nil {
-		return
+	if err := enc.Encode(v); err != nil {
+		return exitOnErr(stderr, err)
 	}
-	enc := json.NewEncoder(os.Stderr)
+	return 0
+}
+
+func fatalf(stderr io.Writer, format string, args ...any) int {
+	_, _ = fmt.Fprintf(stderr, format+"\n", args...)
+	return 1
+}
+
+func exitOnErr(stderr io.Writer, err error) int {
+	if err == nil {
+		return 0
+	}
+	enc := json.NewEncoder(stderr)
 	enc.SetIndent("", "  ")
 	payload := map[string]any{"error": "internal_server_error", "message": "An unexpected error occurred"}
 	var appErr *apperrors.AppError
@@ -236,5 +288,5 @@ func exitOnErr(err error) {
 		payload["message"] = "Concurrent modification detected"
 	}
 	_ = enc.Encode(payload)
-	os.Exit(1)
+	return 1
 }

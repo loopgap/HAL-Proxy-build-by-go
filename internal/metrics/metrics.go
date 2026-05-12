@@ -142,11 +142,20 @@ var (
 // StartGoroutinePolling starts a background goroutine that periodically
 // updates the GoroutineCount metric with the current number of running goroutines.
 func StartGoroutinePolling(interval time.Duration) {
+	startGoroutinePolling(interval, nil)
+}
+
+func startGoroutinePolling(interval time.Duration, stop <-chan struct{}) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			GoroutineCount.Set(float64(runtime.NumGoroutine()))
+		for {
+			select {
+			case <-ticker.C:
+				GoroutineCount.Set(float64(runtime.NumGoroutine()))
+			case <-stop:
+				return
+			}
 		}
 	}()
 }
