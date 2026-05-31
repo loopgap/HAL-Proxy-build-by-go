@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Tag = 'v0.4.3',
+    [string]$Tag = 'v0.4.4',
     [string]$Remote = 'origin',
     [string]$ExpectedPushUrl = 'https://github.com/loopgap/HAL-Proxy-build-by-go.git',
     [string]$ExpectedCommitPrefix = ''

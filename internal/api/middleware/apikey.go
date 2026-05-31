@@ -61,8 +61,8 @@ func APIKeyAuth(config APIKeyConfig) Middleware {
 			// 3. Perform ConstantTimeCompare to further eliminate timing channel leakages
 			expectedMatch := apiKeyHash
 			if !valid {
-				// If not valid, compare with dummy hash to consume constant time overhead
-				expectedMatch = "dummyhashvalueforconstanttimecomparison123"
+				// If not valid, compare with dummy hash of same length (64 chars) to consume constant time overhead
+				expectedMatch = "0000000000000000000000000000000000000000000000000000000000000000"
 			}
 			matchResult := subtle.ConstantTimeCompare([]byte(apiKeyHash), []byte(expectedMatch))
 

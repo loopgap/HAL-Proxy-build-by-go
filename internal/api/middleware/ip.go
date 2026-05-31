@@ -46,6 +46,13 @@ func isTrustedProxy(remoteAddr string, trustedProxies []string) bool {
 	return false
 }
 
+// GetClientIP is an exported wrapper that resolves the real client IP of a request,
+// taking into account the whitelisted trusted proxies.
+func GetClientIP(r *http.Request, trustedProxies []string) string {
+	return getClientIP(r, trustedProxies)
+}
+
+
 func getClientIP(r *http.Request, trustedProxies []string) string {
 	if isTrustedProxy(r.RemoteAddr, trustedProxies) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {

@@ -260,16 +260,31 @@ func (s *Server) shouldTrustLocalRequest(r *http.Request) bool {
 		host = r.RemoteAddr
 	}
 	host = strings.TrimSpace(host)
-	isLoopback := host == "localhost"
-	if !isLoopback {
+	isRemoteLoopback := host == "localhost"
+	if !isRemoteLoopback {
 		ip := net.ParseIP(host)
-		isLoopback = ip != nil && ip.IsLoopback()
+		isRemoteLoopback = ip != nil && ip.IsLoopback()
 	}
-	if isLoopback {
-		logging.Default().Warnf("[SECURITY WARNING] Local request trusted without authentication. RemoteAddr=%s",
-			sanitizeLogValue(r.RemoteAddr))
+
+	if !isRemoteLoopback {
+		return false
 	}
-	return isLoopback
+
+	// Resolve the real client IP, taking into account trusted proxies (e.g. Nginx).
+	// This prevents loopback trust bypass when external traffic passes through local proxies.
+	clientIP := middleware.GetClientIP(r, s.trustedProxies)
+	clientIP = strings.TrimSpace(clientIP)
+	isClientLoopback := clientIP == "localhost" || clientIP == "127.0.0.1" || clientIP == "::1"
+	if !isClientLoopback {
+		ip := net.ParseIP(clientIP)
+		isClientLoopback = ip != nil && ip.IsLoopback()
+	}
+
+	if isClientLoopback {
+		logging.Default().Warnf("[SECURITY WARNING] Local request trusted without authentication. RemoteAddr=%s ClientIP=%s",
+			sanitizeLogValue(r.RemoteAddr), sanitizeLogValue(clientIP))
+	}
+	return isClientLoopback
 }
 
 func (s *Server) withTrustedLocalClaims(r *http.Request) *http.Request {
@@ -298,7 +313,7 @@ func (s *Server) withAPIKeyClaims(r *http.Request, apiKey string) (*http.Request
 
 	expectedMatch := apiKeyHash
 	if !valid {
-		expectedMatch = "dummyhashvalueforconstanttimecomparison123"
+		expectedMatch = "0000000000000000000000000000000000000000000000000000000000000000"
 	}
 	matchResult := subtle.ConstantTimeCompare([]byte(apiKeyHash), []byte(expectedMatch))
 

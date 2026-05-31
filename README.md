@@ -7,7 +7,7 @@ Current repository state:
 - product name: `BridgeOS`
 - CLI binary: `bridge`
 - daemon binary: `bridgeosd`
-- default version line: pre-v1 (`0.4.3`)
+- default version line: pre-v1 (`0.4.4`)
 - API shape: local-first HTTP API with structured JSON responses
 
 ## Current Capabilities
@@ -127,7 +127,7 @@ Legacy `HAL_PROXY_*` variables are still accepted for compatibility.
 BridgeOS features industrial-grade security controls and daemon robustness protections:
 
 ### 1. Timing Attack Protections (API Key Hashing)
-All configured API keys are pre-hashed using SHA-256 during middleware initialization. Request keys are hashed and matched using `crypto/subtle.ConstantTimeCompare` against a dummy value fallback, completely preventing network-level timing side-channel attacks from brute-forcing valid API keys.
+All configured API keys are pre-hashed using SHA-256 during middleware initialization. Request keys are hashed and matched using `crypto/subtle.ConstantTimeCompare` against a dummy value fallback (specifically aligned to the exact 64-character SHA-256 hex length in v0.4.4), completely preventing network-level timing side-channel attacks from brute-forcing valid API keys or leaking key validity via length timing channels.
 
 ### 2. Strong JWT Cryptography
 The token validator strictly enforces HMAC-SHA256 signature algorithm checks (blocking `none` algorithm bypass attempts) and enforces a minimum JWT secret length of **at least 32 characters** (256-bit entropy). Short or empty credentials trigger immediate startup configuration blocks.
@@ -136,7 +136,7 @@ The token validator strictly enforces HMAC-SHA256 signature algorithm checks (bl
 The report content delivery service enforces directory boundary confinement. All paths are resolved and standardized using `filepath.Clean` to strip `..` relative segments, and strictly validated to have the authorized `artifacts/` folder prefix (`strings.HasPrefix`). Traversal attempts outside the directory are automatically blocked with `403 Forbidden`.
 
 ### 4. Reverse Proxy & Rate Limiter DoS Mitigations
-To support standard container reverse proxy setups (Nginx, HAProxy, Ingress), `isTrustedProxy` extracts the real client IP from `X-Forwarded-For` only when the loopback connection is explicitly whitelisted in `BRIDGEOS_TRUSTED_PROXIES` (e.g. `export BRIDGEOS_TRUSTED_PROXIES="127.0.0.1"`). Otherwise, direct loopback trusted mode handles direct client traffic safely.
+To support standard container reverse proxy setups (Nginx, HAProxy, Ingress), `isTrustedProxy` extracts the real client IP from `X-Forwarded-For` only when the loopback connection is explicitly whitelisted in `BRIDGEOS_TRUSTED_PROXIES` (e.g. `export BRIDGEOS_TRUSTED_PROXIES="127.0.0.1"`). In v0.4.4, local loopback trusted mode is fully hardened to verify both the immediate network remote IP and the proxy-resolved client IP, ensuring that external requests arriving via local reverse proxies cannot bypass authentication.
 
 ### 5. Daemon Auto-Recovery (`SafeGo`)
 All critical background tickers (Rate-limiter cleaner, Prometheus telemetry updates) run encapsulated inside the self-recovering `logging.SafeGo` executor. Panics inside background goroutines are gracefully caught, structural logs with detailed stack traces are saved, and the master daemon daemon process is protected from crash collapses.

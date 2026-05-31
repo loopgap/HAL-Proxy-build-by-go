@@ -6,13 +6,13 @@ on:
       tag:
         description: Tag to backfill if the normal release workflow did not create it
         required: true
-        default: v0.4.3
+        default: v0.4.4
 
 permissions:
   contents: write
 
 env:
-  TARGET_TAG: ${{ github.event.inputs.tag || 'v0.4.3' }}
+  TARGET_TAG: ${{ github.event.inputs.tag || 'v0.4.4' }}
 
 jobs:
   backfill:
