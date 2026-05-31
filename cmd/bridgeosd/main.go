@@ -43,12 +43,18 @@ func main() {
 	if err == nil {
 		tp := trace.NewTracerProvider(trace.WithBatcher(exporter))
 		otel.SetTracerProvider(tp)
+		defer func() {
+			if err := tp.Shutdown(context.Background()); err != nil {
+				log.Printf("tracer provider shutdown error: %v", err)
+			}
+		}()
 	}
 
 	// Create rate limiter if enabled
 	var rateLimiter *middleware.RateLimiter
 	if cfg.RateLimit.Enabled {
 		rateLimiter = middleware.NewRateLimiterWithBurst(cfg.RateLimit.RequestsPerMinute, time.Minute, cfg.RateLimit.BurstSize)
+		defer rateLimiter.Stop()
 	}
 
 	svc := core.NewService(repo, cfg.App.ArtifactsDir)
@@ -78,16 +84,13 @@ func main() {
 	)
 
 	srv := &http.Server{
-		Addr:         cfg.Server.Address,
-		Handler:      server.Handler(),
-		ReadTimeout:  cfg.Server.GetReadTimeout(),
-		WriteTimeout: cfg.Server.GetWriteTimeout(),
-		IdleTimeout:  cfg.Server.GetIdleTimeout(),
+		Addr:           cfg.Server.Address,
+		Handler:        server.Handler(),
+		ReadTimeout:    cfg.Server.GetReadTimeout(),
+		WriteTimeout:   cfg.Server.GetWriteTimeout(),
+		IdleTimeout:    cfg.Server.GetIdleTimeout(),
+		MaxHeaderBytes: 1 << 14, // 16KB - prevent header-based memory exhaustion
 	}
-
-	// Create shutdown context with timeout
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
 
 	// Handle shutdown signals
 	sigCh := make(chan os.Signal, 1)
@@ -96,6 +99,8 @@ func main() {
 	go func() {
 		<-sigCh
 		log.Println("received shutdown signal, gracefully shutting down...")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("shutdown error: %v", err)
 		}

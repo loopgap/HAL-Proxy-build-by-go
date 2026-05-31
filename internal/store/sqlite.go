@@ -409,17 +409,17 @@ func (r *SQLiteRepository) GetCaseWithRelations(ctx context.Context, id string) 
 	}
 	defer tx.Rollback()
 
-	c, err := r.GetCase(ctx, id)
+	c, err := r.GetCaseInTx(ctx, tx, id)
 	if err != nil {
 		return domain.CaseWithRelations{}, err
 	}
 
-	events, err := r.ListEvents(ctx, id)
+	events, err := r.ListEventsInTx(ctx, tx, id)
 	if err != nil {
 		return domain.CaseWithRelations{}, fmt.Errorf("list events: %w", err)
 	}
 
-	approvals, err := r.ListApprovals(ctx, id)
+	approvals, err := r.ListApprovalsInTx(ctx, tx, id)
 	if err != nil {
 		return domain.CaseWithRelations{}, fmt.Errorf("list approvals: %w", err)
 	}
@@ -603,7 +603,7 @@ func (r *SQLiteRepository) CreateOrGetPendingApproval(ctx context.Context, a dom
 				ELSE approvals.status 
 			END
 		RETURNING id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at`,
-		a.ID, a.CaseID, a.CommandIndex, a.CommandName, string(a.RiskClass), now)
+		a.ID, a.CaseID, a.CommandIndex, a.CommandName, string(a.RiskClass), now.Format(timestampFormat))
 
 	return scanApproval(row)
 }
@@ -625,7 +625,7 @@ func (r *SQLiteRepository) ListApprovals(ctx context.Context, caseID string) ([]
 		query += ` WHERE case_id = ?`
 		args = append(args, caseID)
 	}
-	query += ` ORDER BY created_at ASC`
+	query += ` ORDER BY created_at ASC LIMIT 1000`
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -691,6 +691,23 @@ func (r *SQLiteRepository) CreateReport(ctx context.Context, rep domain.ReportSu
 	return nil
 }
 
+func (r *SQLiteRepository) CreateReportInTx(ctx context.Context, tx Tx, rep domain.ReportSummary) error {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return fmt.Errorf("invalid transaction type")
+	}
+	_, err := wrapper.tx.ExecContext(
+		ctx,
+		`INSERT INTO reports (id, case_id, owner_id, path, command_count, event_count, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		rep.ID, rep.CaseID, rep.OwnerID, rep.Path, rep.CommandCount, rep.EventCount, rep.CreatedAt.Format(timestampFormat),
+	)
+	if err != nil {
+		return fmt.Errorf("insert report in tx: %w", err)
+	}
+	return nil
+}
+
 func (r *SQLiteRepository) ListReports(ctx context.Context, caseID string, ownerID string) ([]domain.ReportSummary, error) {
 	query := `SELECT id, case_id, owner_id, path, command_count, event_count, created_at FROM reports`
 	args := []any{}
@@ -708,7 +725,7 @@ func (r *SQLiteRepository) ListReports(ctx context.Context, caseID string, owner
 	if len(conditions) > 0 {
 		query += ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
-	query += ` ORDER BY created_at DESC`
+	query += ` ORDER BY created_at DESC LIMIT 1000`
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -839,7 +856,11 @@ func scanApproval(s scanner) (domain.Approval, error) {
 			a.DecidedAt = &parsed
 		}
 	}
-	a.CreatedAt, _ = time.Parse(timestampFormat, createdAt)
+	parsedCreatedAt, err := time.Parse(timestampFormat, createdAt)
+	if err != nil {
+		return domain.Approval{}, fmt.Errorf("parse approval createdAt %q: %w", createdAt, err)
+	}
+	a.CreatedAt = parsedCreatedAt
 	return a, nil
 }
 
@@ -966,12 +987,124 @@ func (r *SQLiteRepository) CreateOrGetPendingApprovalInTx(ctx context.Context, t
 				ELSE approvals.status 
 			END
 		RETURNING id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at`,
-		a.ID, a.CaseID, a.CommandIndex, a.CommandName, string(a.RiskClass), now)
+		a.ID, a.CaseID, a.CommandIndex, a.CommandName, string(a.RiskClass), now.Format(timestampFormat))
 
 	return scanApproval(row)
+}
+
+// GetCaseInTx retrieves a case within a transaction
+func (r *SQLiteRepository) GetCaseInTx(ctx context.Context, tx Tx, id string) (domain.CaseRecord, error) {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return domain.CaseRecord{}, fmt.Errorf("invalid transaction type")
+	}
+	row := wrapper.tx.QueryRowContext(ctx, `SELECT id, owner_id, title, status, spec_json, next_command, version, created_at, updated_at FROM cases WHERE id = ?`, id)
+	return scanCase(row)
+}
+
+// GetApprovalInTx retrieves an approval within a transaction
+func (r *SQLiteRepository) GetApprovalInTx(ctx context.Context, tx Tx, id string) (domain.Approval, error) {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return domain.Approval{}, fmt.Errorf("invalid transaction type")
+	}
+	row := wrapper.tx.QueryRowContext(ctx, `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at FROM approvals WHERE id = ?`, id)
+	return scanApproval(row)
+}
+
+// UpdateApprovalInTx updates an approval within a transaction with optimistic locking
+func (r *SQLiteRepository) UpdateApprovalInTx(ctx context.Context, tx Tx, a domain.Approval) error {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return fmt.Errorf("invalid transaction type")
+	}
+	res, err := wrapper.tx.ExecContext(
+		ctx,
+		`UPDATE approvals
+		 SET status = ?, reason = ?, decided_by = ?, decided_at = ?, version = ?
+		 WHERE id = ? AND version = ?`,
+		a.Status, a.Reason, a.DecidedBy, nullableTime(a.DecidedAt), a.Version, a.ID, a.Version-1,
+	)
+	if err != nil {
+		return fmt.Errorf("update approval in tx: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		existsQuery := `SELECT 1 FROM approvals WHERE id = ?`
+		var exists int
+		if err := wrapper.tx.QueryRowContext(ctx, existsQuery, a.ID).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("UpdateApprovalInTx: %w", err)
+		}
+		return ErrConcurrentModification
+	}
+	return nil
 }
 
 // CleanupExpiredTokens removes expired tokens from the blacklist
 func (r *SQLiteRepository) CleanupExpiredTokens(ctx context.Context) error {
 	return r.Blacklist.Cleanup(ctx)
+}
+
+// ListEventsInTx lists all events for a case within a transaction
+func (r *SQLiteRepository) ListEventsInTx(ctx context.Context, tx Tx, caseID string) ([]domain.EventEnvelope, error) {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return nil, fmt.Errorf("invalid transaction type")
+	}
+	rows, err := wrapper.tx.QueryContext(
+		ctx,
+		`SELECT sequence, case_id, type, payload_json, created_at FROM events WHERE case_id = ? ORDER BY sequence ASC`,
+		caseID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list events in tx: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.EventEnvelope
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// ListApprovalsInTx lists approvals within a transaction
+func (r *SQLiteRepository) ListApprovalsInTx(ctx context.Context, tx Tx, caseID string) ([]domain.Approval, error) {
+	wrapper, ok := tx.(*txWrapper)
+	if !ok {
+		return nil, fmt.Errorf("invalid transaction type")
+	}
+	query := `SELECT id, case_id, command_index, command_name, risk_class, status, reason, decided_by, decided_at, version, created_at FROM approvals`
+	var args []any
+	if caseID != "" {
+		query += ` WHERE case_id = ?`
+		args = append(args, caseID)
+	}
+	query += ` ORDER BY created_at ASC LIMIT 1000`
+
+	rows, err := wrapper.tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list approvals in tx: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.Approval
+	for rows.Next() {
+		a, err := scanApproval(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

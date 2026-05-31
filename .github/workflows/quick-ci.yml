@@ -21,7 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.26.3'
           cache: true
 
       - name: Quick build
@@ -56,6 +56,30 @@ jobs:
         working-directory: ui
         run: npm run lint
 
+
+  # Hardcoded secret scan
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Scan for hardcoded secrets
+        run: |
+          echo "Scanning for hardcoded secrets..."
+          if git log --all --diff-filter=A --name-only --format="" | xargs grep -l -E "(password|secret|api_key|token|private_key)\s*[:=]\s*['\"][^'\"]{8,}" 2>/dev/null; then
+            echo "WARNING: Potential hardcoded secrets found in git history"
+            echo "Review the files above and rotate any exposed credentials"
+          fi
+          echo "Scanning current codebase..."
+          if grep -r -l -E "(password|secret|api_key|token|private_key)\s*[:=]\s*['\"][^'\"]{8,}" --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" . 2>/dev/null | grep -v node_modules | grep -v ".test." | grep -v "testdata"; then
+            echo "ERROR: Hardcoded secrets found in current codebase!"
+            exit 1
+          fi
+          echo "No hardcoded secrets found."
+
   # Fast security checks
   security-quick:
     name: Security Quick Scan
@@ -71,3 +95,5 @@ jobs:
       - name: NPM audit
         working-directory: ui
         run: npm audit --audit-level=high
+
+

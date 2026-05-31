@@ -8,23 +8,53 @@ import (
 
 func TestNormalizeRisk(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    domain.RiskClass
-		expected domain.RiskClass
+		name      string
+		input     domain.RiskClass
+		expected  domain.RiskClass
+		wantError bool
 	}{
-		{"Observe stays as Observe", domain.RiskObserve, domain.RiskObserve},
-		{"Mutate stays as Mutate", domain.RiskMutate, domain.RiskMutate},
-		{"Destructive stays as Destructive", domain.RiskDestructive, domain.RiskDestructive},
-		{"Exclusive stays as Exclusive", domain.RiskExclusive, domain.RiskExclusive},
-		{"Unknown becomes Observe", domain.RiskClass("unknown"), domain.RiskObserve},
-		{"Empty becomes Observe", domain.RiskClass(""), domain.RiskObserve},
-		{"Random string becomes Observe", domain.RiskClass("random"), domain.RiskObserve},
+		{"Observe stays as Observe", domain.RiskObserve, domain.RiskObserve, false},
+		{"Mutate stays as Mutate", domain.RiskMutate, domain.RiskMutate, false},
+		{"Destructive stays as Destructive", domain.RiskDestructive, domain.RiskDestructive, false},
+		{"Exclusive stays as Exclusive", domain.RiskExclusive, domain.RiskExclusive, false},
+		{"Unknown returns error", domain.RiskClass("unknown"), "", true},
+		{"Empty returns error", domain.RiskClass(""), "", true},
+		{"Random string returns error", domain.RiskClass("random"), "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := NormalizeRisk(tt.input); got != tt.expected {
+			got, err := NormalizeRisk(tt.input)
+			if (err != nil) != tt.wantError {
+				t.Errorf("NormalizeRisk(%v) error = %v, wantError %v", tt.input, err, tt.wantError)
+				return
+			}
+			if got != tt.expected {
 				t.Errorf("NormalizeRisk(%v) = %v, want %v", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestValidateRisk(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     domain.RiskClass
+		wantError bool
+	}{
+		{"Observe is valid", domain.RiskObserve, false},
+		{"Mutate is valid", domain.RiskMutate, false},
+		{"Destructive is valid", domain.RiskDestructive, false},
+		{"Exclusive is valid", domain.RiskExclusive, false},
+		{"Unknown is invalid", domain.RiskClass("unknown"), true},
+		{"Empty is invalid", domain.RiskClass(""), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRisk(tt.input)
+			if (err != nil) != tt.wantError {
+				t.Errorf("ValidateRisk(%v) error = %v, wantError %v", tt.input, err, tt.wantError)
 			}
 		})
 	}
@@ -40,8 +70,8 @@ func TestRequiresApproval(t *testing.T) {
 		{"Mutate requires approval", domain.RiskMutate, true},
 		{"Destructive requires approval", domain.RiskDestructive, true},
 		{"Exclusive requires approval", domain.RiskExclusive, true},
-		{"Unknown does not require approval", domain.RiskClass("unknown"), false},
-		{"Empty does not require approval", domain.RiskClass(""), false},
+		{"Unknown requires approval (fail-closed)", domain.RiskClass("unknown"), true},
+		{"Empty requires approval (fail-closed)", domain.RiskClass(""), true},
 	}
 
 	for _, tt := range tests {
@@ -63,8 +93,8 @@ func TestGetRiskPriority(t *testing.T) {
 		{"Mutate has priority 1", domain.RiskMutate, 1},
 		{"Destructive has priority 2", domain.RiskDestructive, 2},
 		{"Exclusive has priority 3", domain.RiskExclusive, 3},
-		{"Unknown has priority 0", domain.RiskClass("unknown"), 0},
-		{"Empty has priority 0", domain.RiskClass(""), 0},
+		{"Unknown has priority 999 (fail-closed)", domain.RiskClass("unknown"), 999},
+		{"Empty has priority 999 (fail-closed)", domain.RiskClass(""), 999},
 	}
 
 	for _, tt := range tests {
@@ -86,9 +116,8 @@ func TestGetRiskDescription(t *testing.T) {
 		{"Mutate description", domain.RiskMutate, "Operations that modify state"},
 		{"Destructive description", domain.RiskDestructive, "Operations that may cause data loss"},
 		{"Exclusive description", domain.RiskExclusive, "Operations that require exclusive access"},
-		// Unknown risks are normalized to Observe, so they get the Observe description
-		{"Unknown description", domain.RiskClass("unknown"), "Read-only operations, no modification"},
-		{"Empty description", domain.RiskClass(""), "Read-only operations, no modification"},
+		{"Unknown description", domain.RiskClass("unknown"), "Unknown risk level — treated as highest risk"},
+		{"Empty description", domain.RiskClass(""), "Unknown risk level — treated as highest risk"},
 	}
 
 	for _, tt := range tests {
@@ -174,7 +203,11 @@ func TestNormalizeRiskPreservesKnownRisks(t *testing.T) {
 	}
 
 	for _, risk := range knownRisks {
-		normalized := NormalizeRisk(risk)
+		normalized, err := NormalizeRisk(risk)
+		if err != nil {
+			t.Errorf("NormalizeRisk failed for known risk %v: %v", risk, err)
+			continue
+		}
 		if normalized != risk {
 			t.Errorf("NormalizeRisk should preserve known risk %v, but got %v", risk, normalized)
 		}
@@ -191,9 +224,9 @@ func TestRequiresApprovalWithNormalizedRisk(t *testing.T) {
 		{domain.RiskMutate, true},
 		{domain.RiskDestructive, true},
 		{domain.RiskExclusive, true},
-		// Unknown risks should be treated as observe (no approval needed)
-		{domain.RiskClass("unknown"), false},
-		{domain.RiskClass(""), false},
+		// Unknown risks should require approval (fail-closed)
+		{domain.RiskClass("unknown"), true},
+		{domain.RiskClass(""), true},
 	}
 
 	for _, tc := range testCases {
@@ -216,7 +249,7 @@ func BenchmarkNormalizeRisk(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for _, risk := range risks {
-			_ = NormalizeRisk(risk)
+			_, _ = NormalizeRisk(risk)
 		}
 	}
 }

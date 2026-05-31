@@ -1,5 +1,5 @@
 # ==========================================
-# HAL-Proxy .gitignore
+# BridgeOS .gitignore
 # ==========================================
 
 # === Go ===
@@ -16,7 +16,7 @@
 bin/
 *.test
 
-# Dependencies (但保留 go.mod 和 go.sum)
+# Dependencies (except go.mod and go.sum)
 /vendor/
 
 # Build outputs
@@ -27,6 +27,8 @@ bin/
 bridgeos.db
 hal-proxy.db
 *.db
+*.db-shm
+*.db-wal
 
 # === Artifacts ===
 artifacts/*.md
@@ -76,9 +78,12 @@ desktop.ini
 *.log
 logs/
 *.log.*
+otel-exporter.log
 
 # === Coverage ===
 coverage/
+coverage
+coverage_go.out
 coverage.out
 coverage.html
 *.cover
@@ -89,6 +94,9 @@ coverage.html
 *.bak
 *.orig
 *.old
+release/
+.gocache/
+.tmp-smoke/
 
 # === Secrets ===
 *.pem
@@ -109,15 +117,6 @@ out/
 .sisyphus/evidence/
 *.evidence.*
 
-# === Temporary ===
-release/
-.gocache/
-.tmp-smoke/
-*.db-shm
-*.db-wal
-bin/
-otel-exporter.log
-
 # === Test Results ===
 ui/test-results/
 *.test.results.xml
@@ -125,5 +124,3 @@ ui/test-results/
 # === Playwright ===
 ui/playwright-report/
 ui/.playwright/
-
-coverage/

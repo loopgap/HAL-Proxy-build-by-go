@@ -49,6 +49,12 @@ type Repository interface {
 	AppendEventInTx(ctx context.Context, tx Tx, e domain.EventEnvelope) (domain.EventEnvelope, error)
 	FindApprovalByCommandInTx(ctx context.Context, tx Tx, caseID string, commandIndex int) (domain.Approval, error)
 	CreateOrGetPendingApprovalInTx(ctx context.Context, tx Tx, a domain.Approval) (domain.Approval, error)
+	GetCaseInTx(ctx context.Context, tx Tx, id string) (domain.CaseRecord, error)
+	GetApprovalInTx(ctx context.Context, tx Tx, id string) (domain.Approval, error)
+	UpdateApprovalInTx(ctx context.Context, tx Tx, a domain.Approval) error
+	ListEventsInTx(ctx context.Context, tx Tx, caseID string) ([]domain.EventEnvelope, error)
+	ListApprovalsInTx(ctx context.Context, tx Tx, caseID string) ([]domain.Approval, error)
+	CreateReportInTx(ctx context.Context, tx Tx, rep domain.ReportSummary) error
 
 	// DeleteCase removes a case and its associated events and approvals
 	DeleteCase(ctx context.Context, id string) error

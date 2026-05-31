@@ -75,9 +75,17 @@ func New(output io.Writer, level string) *Logger {
 	}
 }
 
+var (
+	defaultLogger     *Logger
+	defaultLoggerOnce sync.Once
+)
+
 // Default returns a default logger that writes to stdout
 func Default() *Logger {
-	return New(os.Stdout, "info")
+	defaultLoggerOnce.Do(func() {
+		defaultLogger = New(os.Stdout, "info")
+	})
+	return defaultLogger
 }
 
 // WithField adds a field to the logger
@@ -144,6 +152,10 @@ func (l *Logger) log(level LogLevel, msg string, fields map[string]interface{}) 
 	}
 
 	data, err := json.Marshal(entry)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if err != nil {
 		fmt.Fprintf(l.output, "failed to marshal log entry: %v\n", err)
 		return

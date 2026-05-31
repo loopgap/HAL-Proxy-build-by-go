@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"time"
 
+	"bridgeos/internal/logging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -146,7 +147,7 @@ func StartGoroutinePolling(interval time.Duration) {
 }
 
 func startGoroutinePolling(interval time.Duration, stop <-chan struct{}) {
-	go func() {
+	logging.SafeGo(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -157,5 +158,5 @@ func startGoroutinePolling(interval time.Duration, stop <-chan struct{}) {
 				return
 			}
 		}
-	}()
+	})
 }

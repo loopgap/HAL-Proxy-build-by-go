@@ -11,7 +11,7 @@ import (
 
 func TestGenerateToken(t *testing.T) {
 	config := JWTConfig{
-		Secret:          "test-secret-key",
+		Secret:          "test-secret-key-that-is-at-least-32-bytes-long",
 		ExpirationHours: 24,
 		Issuer:          "test-issuer",
 	}
@@ -143,7 +143,7 @@ func parseToken(tokenString string, secret string) (*Claims, error) {
 
 func TestValidateToken(t *testing.T) {
 	config := JWTConfig{
-		Secret:          "test-secret-key",
+		Secret:          "test-secret-key-that-is-at-least-32-bytes-long",
 		ExpirationHours: 24,
 		Issuer:          "test-issuer",
 	}
@@ -207,7 +207,7 @@ func TestValidateToken(t *testing.T) {
 		}
 
 		auth := NewJWTAuthenticator(JWTConfig{
-			Secret:          "wrong-secret",
+			Secret:          "wrong-secret-key-that-is-at-least-32-bytes-long",
 			ExpirationHours: 24,
 			Issuer:          "test-issuer",
 		})

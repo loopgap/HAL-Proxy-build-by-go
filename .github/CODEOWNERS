@@ -1,0 +1,21 @@
+# Default owners for everything in the repo
+* @loopgap
+
+# Backend (Go)
+/internal/ @loopgap
+/cmd/ @loopgap
+/go.mod @loopgap
+/go.sum @loopgap
+
+# Frontend (React/TypeScript)
+/ui/ @loopgap
+
+# CI/CD and DevOps
+/.github/ @loopgap
+/Dockerfile* @loopgap
+/docker-compose* @loopgap
+/Makefile @loopgap
+
+# Documentation
+/docs/ @loopgap
+*.md @loopgap

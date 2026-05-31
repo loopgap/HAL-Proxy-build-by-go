@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 WORKDIR /app
 
@@ -23,8 +23,8 @@ FROM alpine:3.19
 
 WORKDIR /app
 
-# Install runtime dependencies including su-exec for privilege drop
-RUN apk add --no-cache ca-certificates tzdata su-exec
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata
 
 # Create bridgeos user and group
 RUN addgroup -g 1000 bridgeos && adduser -u 1000 -G bridgeos -s /bin/sh -D bridgeos
@@ -43,6 +43,10 @@ ENV BRIDGEOS_DB=/app/data/bridgeos.db
 ENV BRIDGEOS_ADDR=:8080
 ENV BRIDGEOS_ARTIFACTS=/app/artifacts
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD wget -qO- http://localhost:8080/v1/health || exit 1
+
 # Run the binary as non-root user
 USER bridgeos
-CMD ["su-exec", "bridgeos", "./bridgeosd"]
+CMD ["./bridgeosd"]

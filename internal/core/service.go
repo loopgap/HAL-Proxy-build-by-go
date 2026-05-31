@@ -141,7 +141,15 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 	ctx, span := s.tracer.Start(ctx, "service.resolve_approval")
 	defer span.End()
 
-	approval, err := s.repo.GetApproval(ctx, approvalID)
+	// 1. Begin transaction for atomic operations
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return domain.Approval{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 2. Retrieve approval record within transaction
+	approval, err := s.repo.GetApprovalInTx(ctx, tx, approvalID)
 	if err != nil {
 		return domain.Approval{}, fmt.Errorf("get approval: %w", err)
 	}
@@ -149,6 +157,17 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 	// Idempotent: return current state if already resolved
 	if approval.Status == domain.ApprovalApproved || approval.Status == domain.ApprovalRejected {
 		return approval, nil
+	}
+
+	// 3. Load associated Case record within transaction
+	c, err := s.repo.GetCaseInTx(ctx, tx, approval.CaseID)
+	if err != nil {
+		return domain.Approval{}, fmt.Errorf("get case: %w", err)
+	}
+
+	// 4. Segregation of duties: Case creator cannot resolve their own approvals
+	if c.OwnerID == actor {
+		return domain.Approval{}, apperrors.ErrForbidden("approver cannot be the case owner")
 	}
 
 	now := time.Now().UTC()
@@ -165,14 +184,16 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 	approval.Reason = reason
 	approval.Version++
 
-	if err := s.repo.UpdateApproval(ctx, approval); err != nil {
+	// 5. Update Approval record within transaction
+	if err := s.repo.UpdateApprovalInTx(ctx, tx, approval); err != nil {
 		if errors.Is(err, store.ErrConcurrentModification) {
 			return domain.Approval{}, apperrors.ErrConflict("approval was modified by another actor")
 		}
 		return domain.Approval{}, err
 	}
 
-	if err := s.appendEvent(ctx, approval.CaseID, "bridge.approval.resolved", map[string]any{
+	// 6. Append audit event within transaction
+	if err := s.appendEventInTx(ctx, tx, approval.CaseID, "bridge.approval.resolved", map[string]any{
 		"approval_id":     approval.ID,
 		"command_index":   approval.CommandIndex,
 		"command_name":    approval.CommandName,
@@ -183,8 +204,8 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 		return domain.Approval{}, err
 	}
 
-	c, err := s.repo.GetCase(ctx, approval.CaseID)
-	if err == nil && c.Status == domain.CaseStatusPaused {
+	// 7. Verify Case status and update within transaction
+	if c.Status == domain.CaseStatusPaused {
 		var targetStatus domain.CaseStatus
 		if approval.Status == domain.ApprovalApproved {
 			targetStatus = domain.CaseStatusReady
@@ -197,12 +218,17 @@ func (s *Service) ResolveApproval(ctx context.Context, approvalID, actor, decisi
 		c.Status = targetStatus
 		c.UpdatedAt = now
 		c.Version++
-		if err := s.repo.UpdateCase(ctx, c); err != nil {
+		if err := s.repo.UpdateCaseInTx(ctx, tx, c); err != nil {
 			if errors.Is(err, store.ErrConcurrentModification) {
 				return domain.Approval{}, apperrors.ErrConflict("case was modified by another actor")
 			}
 			return domain.Approval{}, err
 		}
+	}
+
+	// 8. Commit the entire transaction
+	if err := tx.Commit(); err != nil {
+		return domain.Approval{}, fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return approval, nil
@@ -212,10 +238,18 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 	ctx, span := s.tracer.Start(ctx, "service.run_case")
 	defer span.End()
 
-	c, err := s.repo.GetCase(ctx, caseID)
+	// Begin transaction for atomic operations
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return RunResult{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	c, err := s.repo.GetCaseInTx(ctx, tx, caseID)
 	if err != nil {
 		return RunResult{}, err
 	}
+
 	// Ownership check - only owner can run the case (prevents IDOR)
 	if c.OwnerID != actor {
 		return RunResult{}, store.ErrNotFound
@@ -226,13 +260,6 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 		}
 		return RunResult{}, apperrors.ErrCaseInvalidStatus(string(c.Status), string(domain.CaseStatusRunning))
 	}
-
-	// Begin transaction for atomic operations
-	tx, err := s.repo.BeginTx(ctx)
-	if err != nil {
-		return RunResult{}, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
 
 	c.Status = domain.CaseStatusRunning
 	c.UpdatedAt = time.Now().UTC()
@@ -249,7 +276,10 @@ func (s *Service) RunCase(ctx context.Context, caseID, actor string) (RunResult,
 
 	for idx := c.NextCommand; idx < len(c.Spec.Commands); idx++ {
 		cmd := c.Spec.Commands[idx]
-		risk := policy.NormalizeRisk(cmd.RiskClass)
+		risk, err := policy.NormalizeRisk(cmd.RiskClass)
+		if err != nil {
+			return RunResult{}, fmt.Errorf("normalize risk for command %q: %w", cmd.Name, err)
+		}
 
 		if err := s.appendEventInTx(ctx, tx, c.ID, "bridge.step.started", map[string]any{
 			"command_index": idx,
@@ -420,16 +450,31 @@ func (s *Service) BuildReport(ctx context.Context, caseID string, ownerID string
 	if err := os.WriteFile(rep.Path, []byte(body), 0o644); err != nil {
 		return domain.ReportSummary{}, fmt.Errorf("write report: %w", err)
 	}
-	if err := s.repo.CreateReport(ctx, rep); err != nil {
-		// DB insert failed - remove orphaned file to maintain atomicity
+
+	// Begin transaction to ensure report insertion and event logging are atomic
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		_ = os.Remove(rep.Path)
+		return domain.ReportSummary{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := s.repo.CreateReportInTx(ctx, tx, rep); err != nil {
 		_ = os.Remove(rep.Path)
 		return domain.ReportSummary{}, fmt.Errorf("create report record: %w", err)
 	}
-	if err := s.appendEvent(ctx, c.ID, "bridge.report.generated", map[string]any{
+
+	if err := s.appendEventInTx(ctx, tx, c.ID, "bridge.report.generated", map[string]any{
 		"report_id": rep.ID,
 		"path":      rep.Path,
 	}); err != nil {
+		_ = os.Remove(rep.Path)
 		return domain.ReportSummary{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = os.Remove(rep.Path)
+		return domain.ReportSummary{}, fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return rep, nil
@@ -468,7 +513,17 @@ func (s *Service) GetReportContent(ctx context.Context, reportID string, ownerID
 		return domain.ReportSummary{}, nil, err
 	}
 
-	body, err := os.ReadFile(report.Path)
+	// 1. Normalize path and resolve any relative ".." elements to prevent LFI path traversal
+	cleanPath := filepath.Clean(report.Path)
+	cleanArtifactsDir := filepath.Clean(s.artifactsDir)
+
+	// 2. Enforce directory containment boundary check
+	expectedPrefix := cleanArtifactsDir + string(filepath.Separator)
+	if !strings.HasPrefix(cleanPath, expectedPrefix) {
+		return domain.ReportSummary{}, nil, apperrors.ErrForbidden("access denied: path traversal attempt blocked")
+	}
+
+	body, err := os.ReadFile(cleanPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return domain.ReportSummary{}, nil, apperrors.ErrReportContentMissing(reportID)
@@ -576,7 +631,8 @@ func reportMarkdown(c domain.CaseRecord, events []domain.EventEnvelope, approval
 	}
 
 	for i, cmd := range c.Spec.Commands {
-		lines = append(lines, fmt.Sprintf("%d. `%s` `%s` risk=`%s`", i+1, cmd.Name, cmd.Action, policy.NormalizeRisk(cmd.RiskClass)))
+		risk, _ := policy.NormalizeRisk(cmd.RiskClass)
+		lines = append(lines, fmt.Sprintf("%d. `%s` `%s` risk=`%s`", i+1, cmd.Name, cmd.Action, risk))
 	}
 
 	lines = append(lines, "", "## Approvals", "")
@@ -599,7 +655,7 @@ func reportMarkdown(c domain.CaseRecord, events []domain.EventEnvelope, approval
 func newID(prefix string) string {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
 	}
 	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(buf))
 }

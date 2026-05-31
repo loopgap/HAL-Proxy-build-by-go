@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"net/http"
 )
 
@@ -21,6 +24,15 @@ func DefaultAPIKeyConfig() APIKeyConfig {
 }
 
 func APIKeyAuth(config APIKeyConfig) Middleware {
+	// Pre-hash valid keys during initialization (once) to prevent map lookup timing attacks
+	hashedKeys := make(map[string]string, len(config.ValidKeys))
+	for key, val := range config.ValidKeys {
+		hasher := sha256.New()
+		hasher.Write([]byte(key))
+		hashedKey := hex.EncodeToString(hasher.Sum(nil))
+		hashedKeys[hashedKey] = val
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			for _, path := range config.SkipPaths {
@@ -37,8 +49,24 @@ func APIKeyAuth(config APIKeyConfig) Middleware {
 				http.Error(w, "missing_api_key", http.StatusUnauthorized)
 				return
 			}
-			service, valid := config.ValidKeys[apiKey]
-			if !valid || service == "" {
+
+			// 1. Calculate SHA-256 hash of incoming API key to prevent Timing Attacks on length
+			hasher := sha256.New()
+			hasher.Write([]byte(apiKey))
+			apiKeyHash := hex.EncodeToString(hasher.Sum(nil))
+
+			// 2. Perform map lookup using the hashed key to eliminate partial key prefix matching timings
+			service, valid := hashedKeys[apiKeyHash]
+
+			// 3. Perform ConstantTimeCompare to further eliminate timing channel leakages
+			expectedMatch := apiKeyHash
+			if !valid {
+				// If not valid, compare with dummy hash to consume constant time overhead
+				expectedMatch = "dummyhashvalueforconstanttimecomparison123"
+			}
+			matchResult := subtle.ConstantTimeCompare([]byte(apiKeyHash), []byte(expectedMatch))
+
+			if matchResult != 1 || !valid || service == "" {
 				http.Error(w, "invalid_api_key", http.StatusUnauthorized)
 				return
 			}

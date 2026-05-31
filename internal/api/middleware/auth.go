@@ -78,6 +78,9 @@ func writeAuthError(w http.ResponseWriter, errorKey string, status int) {
 
 // ValidateToken validates a JWT token and checks the blacklist
 func (m *JWTAuthenticator) ValidateToken(ctx context.Context, tokenString string) (*Claims, error) {
+	if len(m.Config.Secret) < 32 {
+		return nil, errors.New("insecure configuration: JWT secret key is too weak, minimum 32 characters required")
+	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("invalid signing method")

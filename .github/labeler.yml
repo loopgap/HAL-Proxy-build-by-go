@@ -1,0 +1,35 @@
+backend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/**"
+          - "cmd/**"
+          - "go.mod"
+          - "go.sum"
+
+frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "ui/**"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "Makefile"
+          - "Dockerfile*"
+          - "docker-compose*"
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "*.md"
+          - "LICENSE"
+
+security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "SECURITY.md"
+          - ".github/workflows/gitleaks.yml"
+          - ".github/workflows/scorecards.yml"
+          - ".github/workflows/dependency-review.yml"

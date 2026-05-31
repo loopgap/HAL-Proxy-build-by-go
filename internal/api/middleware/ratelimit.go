@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bridgeos/internal/logging"
 	"net/http"
 	"sync"
 	"time"
@@ -29,7 +30,7 @@ func NewRateLimiterWithBurst(limit int, window time.Duration, burstSize int) *Ra
 		burst:    burstSize,
 		done:     make(chan struct{}),
 	}
-	go rl.cleanup()
+	logging.SafeGo(rl.cleanup)
 	return rl
 }
 

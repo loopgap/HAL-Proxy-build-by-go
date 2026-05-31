@@ -223,3 +223,17 @@ build-all-platforms:
 
 # ============ Full CI ============
 ci-full: fmt lint-check frontend-typecheck test frontend-lint
+
+# Check Go coverage threshold
+test-coverage-check:
+	@echo "Running tests with coverage threshold..."
+	@mkdir -p .tmp/coverage/go
+	$(GOTEST) -race -coverpkg=./cmd/...,./internal/... -coverprofile=.tmp/coverage/go/coverage.out $(GO_PACKAGES) > /dev/null 2>&1
+	@COVERAGE=$(go tool cover -func=.tmp/coverage/go/coverage.out | tail -1 | awk '{print $3}' | sed 's/%//'); \
+	echo "Go coverage: ${COVERAGE}%"; \
+	if [ "$(echo "${COVERAGE} < 50" | bc -l)" -eq 1 ]; then \
+		echo "ERROR: Go coverage ${COVERAGE}% is below 50% threshold"; \
+		exit 1; \
+	fi
+	@echo "Go coverage threshold met!"
+

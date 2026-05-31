@@ -1,0 +1,53 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosimple
+    - gosec
+    - misspell
+    - gofmt
+    - goimports
+    - bodyclose
+    - noctx
+    - unconvert
+    - unparam
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+  gosec:
+    excludes:
+      - G104
+      - G304
+  misspell:
+    locale: US
+  goimports:
+    local-prefixes: bridgeos
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - errcheck
+    - path: cmd/
+      linters:
+        - unparam
+  exclude-dirs:
+    - vendor
+    - node_modules
+    - dist
+    - .tmp

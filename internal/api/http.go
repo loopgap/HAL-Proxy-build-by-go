@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +19,9 @@ import (
 	"bridgeos/internal/core"
 	"bridgeos/internal/domain"
 	apperrors "bridgeos/internal/errors"
+	"bridgeos/internal/logging"
 	"bridgeos/internal/metrics"
+	"bridgeos/internal/policy"
 	"bridgeos/internal/store"
 	"bridgeos/internal/version"
 
@@ -79,6 +84,14 @@ func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRe
 	}
 	authMW = jwtAuth.Middleware()
 
+	hashedKeys := make(map[string]string, len(apiKeys))
+	for key, val := range apiKeys {
+		hasher := sha256.New()
+		hasher.Write([]byte(key))
+		hashedKey := hex.EncodeToString(hasher.Sum(nil))
+		hashedKeys[hashedKey] = val
+	}
+
 	return &Server{
 		svc:            svc,
 		healthChecker:  healthChecker,
@@ -90,7 +103,7 @@ func NewServer(svc *core.Service, healthChecker healthChecker, blacklist tokenRe
 		localRoles:     localRoles,
 		rateLimiter:    rateLimiter,
 		corsConfig:     corsConfig,
-		apiKeys:        apiKeys,
+		apiKeys:        hashedKeys,
 	}
 }
 
@@ -108,6 +121,7 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	root = middleware.CORS(s.corsConfig)(root)
+	root = middleware.Security(root)
 
 	return root
 }
@@ -188,11 +202,6 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// Security headers
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("X-XSS-Protection", "1; mode=block")
-
 	// Add request timeout context
 	ctx := r.Context()
 	if _, ok := ctx.Deadline(); !ok {
@@ -257,7 +266,7 @@ func (s *Server) shouldTrustLocalRequest(r *http.Request) bool {
 		isLoopback = ip != nil && ip.IsLoopback()
 	}
 	if isLoopback {
-		log.Printf("[SECURITY WARNING] Local request trusted without authentication. RemoteAddr=%s",
+		logging.Default().Warnf("[SECURITY WARNING] Local request trusted without authentication. RemoteAddr=%s",
 			sanitizeLogValue(r.RemoteAddr))
 	}
 	return isLoopback
@@ -281,10 +290,22 @@ func (s *Server) withTrustedLocalClaims(r *http.Request) *http.Request {
 }
 
 func (s *Server) withAPIKeyClaims(r *http.Request, apiKey string) (*http.Request, bool) {
-	service, ok := s.apiKeys[apiKey]
-	if !ok || strings.TrimSpace(service) == "" {
+	hasher := sha256.New()
+	hasher.Write([]byte(apiKey))
+	apiKeyHash := hex.EncodeToString(hasher.Sum(nil))
+
+	service, valid := s.apiKeys[apiKeyHash]
+
+	expectedMatch := apiKeyHash
+	if !valid {
+		expectedMatch = "dummyhashvalueforconstanttimecomparison123"
+	}
+	matchResult := subtle.ConstantTimeCompare([]byte(apiKeyHash), []byte(expectedMatch))
+
+	if matchResult != 1 || !valid || strings.TrimSpace(service) == "" {
 		return r, false
 	}
+
 	claims := &middleware.Claims{
 		UserID:   service,
 		Username: service,
@@ -310,7 +331,7 @@ func (s *Server) routeInternal(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
 		s.handleHealthCheck(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health/ready":
-		s.handleHealthReady(w)
+		s.handleHealthReady(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health/live":
 		s.handleHealthLive(w)
 
@@ -409,12 +430,12 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter) {
 }
 
 // handleHealthReady returns server readiness with database connectivity check
-func (s *Server) handleHealthReady(w http.ResponseWriter) {
+func (s *Server) handleHealthReady(w http.ResponseWriter, r *http.Request) {
 	if s.healthChecker == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "reason": "no_database"})
 		return
 	}
-	if err := s.healthChecker.PingContext(context.Background()); err != nil {
+	if err := s.healthChecker.PingContext(r.Context()); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "reason": "database_unreachable"})
 		return
 	}
@@ -449,9 +470,27 @@ func (s *Server) handleCreateCase(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title_required"})
 		return
 	}
+	if len(spec.Title) > 500 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "title_too_long", "message": "Title cannot exceed 500 characters"})
+		return
+	}
 	if len(spec.Commands) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "commands_required"})
 		return
+	}
+	if len(spec.Commands) > 100 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "too_many_commands", "message": "A case cannot contain more than 100 commands"})
+		return
+	}
+	for i, cmd := range spec.Commands {
+		if cmd.Name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_command", "message": fmt.Sprintf("Command at index %d requires a name", i)})
+			return
+		}
+		if err := policy.ValidateRisk(cmd.RiskClass); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_risk_class", "message": fmt.Sprintf("Command %q: %v", cmd.Name, err)})
+			return
+		}
 	}
 
 	userID := middleware.GetUserIDFromContext(r.Context())
@@ -463,15 +502,31 @@ func (s *Server) handleCreateCase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
+const (
+	DefaultPageLimit = 20
+	MaxPageLimit     = 100
+)
+
+func clampLimit(raw int) int {
+	if raw <= 0 {
+		return DefaultPageLimit
+	}
+	if raw > MaxPageLimit {
+		return MaxPageLimit
+	}
+	return raw
+}
+
 // handleListCases lists all cases with pagination
 func (s *Server) handleListCases(w http.ResponseWriter, r *http.Request) {
 	cursor := r.URL.Query().Get("cursor")
-	limit := 20
+	limit := DefaultPageLimit
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil {
 			limit = parsed
 		}
 	}
+	limit = clampLimit(limit)
 
 	userID := middleware.GetUserIDFromContext(r.Context())
 	cases, nextCursor, hasMore, err := s.svc.ListCasesPaginated(r.Context(), cursor, limit, userID)
@@ -491,7 +546,7 @@ func (s *Server) handleListCases(w http.ResponseWriter, r *http.Request) {
 // Returns the ID and true if valid, or "" and false if invalid.
 func extractID(r *http.Request, prefix, suffix string) (string, bool) {
 	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), suffix)
-	return id, id != "" && !strings.Contains(id, "..")
+	return id, id != "" && !strings.Contains(id, "..") && !strings.Contains(id, "/") && !strings.Contains(id, "\\")
 }
 
 func extractActionID(r *http.Request, prefix string, suffixes ...string) (string, bool) {
@@ -508,7 +563,7 @@ func extractReportID(r *http.Request) (string, bool) {
 	if strings.HasSuffix(id, "/content") {
 		id = strings.TrimSuffix(id, "/content")
 	}
-	return id, id != "" && !strings.Contains(id, "/") && !strings.Contains(id, "..")
+	return id, id != "" && !strings.Contains(id, "/") && !strings.Contains(id, "\\") && !strings.Contains(id, "..")
 }
 
 func (s *Server) handleGetCase(w http.ResponseWriter, r *http.Request) {
@@ -517,10 +572,13 @@ func (s *Server) handleGetCase(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
 		return
 	}
-	userID := middleware.GetUserIDFromContext(r.Context())
-	c, err := s.svc.GetCase(r.Context(), id, userID)
+	c, allowed, err := s.authorizeCaseRead(r.Context(), id)
 	if err != nil {
 		writeError(w, err)
+		return
+	}
+	if !allowed {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "message": "You do not have permission to view this case"})
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
@@ -542,7 +600,11 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Parse pagination params
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit = clampLimit(limit)
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
 
 	events, total, err := s.svc.ListEventsPaginated(r.Context(), id, limit, offset)
 	if err != nil {
@@ -574,6 +636,10 @@ func (s *Server) handleRunCase(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	caseID := r.URL.Query().Get("case_id")
+	if caseID != "" && (strings.Contains(caseID, "..") || strings.Contains(caseID, "/") || strings.Contains(caseID, "\\")) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
+		return
+	}
 	userID := middleware.GetUserIDFromContext(r.Context())
 	claims, _ := middleware.GetClaimsFromContext(r.Context())
 
@@ -665,8 +731,13 @@ func (s *Server) handleBuildReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListReports(w http.ResponseWriter, r *http.Request) {
+	caseID := r.URL.Query().Get("case_id")
+	if caseID != "" && (strings.Contains(caseID, "..") || strings.Contains(caseID, "/") || strings.Contains(caseID, "\\")) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_case_id"})
+		return
+	}
 	userID := middleware.GetUserIDFromContext(r.Context())
-	reports, err := s.svc.ListReports(r.Context(), r.URL.Query().Get("case_id"), userID)
+	reports, err := s.svc.ListReports(r.Context(), caseID, userID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -793,7 +864,7 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusGatewayTimeout, map[string]any{"error": "timeout", "message": "Request timed out"})
 		return
 	}
-	log.Printf("internal server error: %v", err)
+	logging.Default().Errorf("internal server error: %v", err)
 	writeJSON(w, http.StatusInternalServerError, map[string]any{
 		"error":   "internal_server_error",
 		"message": "An unexpected error occurred",
@@ -804,6 +875,6 @@ func writeError(w http.ResponseWriter, err error) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("JSON encoding error: %v", err)
+		logging.Default().Errorf("JSON encoding error: %v", err)
 	}
 }

@@ -17,8 +17,14 @@ func isTrustedProxy(remoteAddr string, trustedProxies []string) bool {
 	}
 
 	// Localhost addresses can be spoofed - they should NOT be trusted for header forwarding
-	// An attacker can easily spoof their source IP to 127.0.0.1 to bypass rate limiting
-	if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+	// unless the administrator explicitly trusts them by adding loopback IP/host to trustedProxies
+	isLocal := host == "127.0.0.1" || host == "::1" || host == "localhost"
+	if isLocal {
+		for _, proxy := range trustedProxies {
+			if proxy == "127.0.0.1" || proxy == "::1" || proxy == "localhost" || proxy == "*" {
+				return true
+			}
+		}
 		return false
 	}
 

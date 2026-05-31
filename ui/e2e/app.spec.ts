@@ -19,7 +19,9 @@ test.describe('HAL-Proxy Authentication', () => {
   test('login page renders correctly', async ({ page }) => {
     await page.goto('/login')
     await expect(page.getByRole('heading', { name: /BridgeOS Access/i })).toBeVisible()
-    await expect(page.getByRole('button', { name: /Continue In Local Trusted Mode/i })).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /Continue In Local Trusted Mode/i }),
+    ).toBeVisible()
   })
 
   test('unauthenticated user is redirected from protected route', async ({ page }) => {
@@ -132,15 +134,20 @@ test.describe('HAL-Proxy Case Detail', () => {
         await route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({
-            items: [{
-              id: 'case-1',
-              title: 'Inspect Relay',
-              status: 'paused',
-              spec: { title: 'Inspect Relay', commands: [{ name: 'inspect', action: 'read', risk_class: 'observe' }] },
-              next_command: 0,
-              created_at: '2026-05-12T00:00:00Z',
-              updated_at: '2026-05-12T00:00:00Z',
-            }],
+            items: [
+              {
+                id: 'case-1',
+                title: 'Inspect Relay',
+                status: 'paused',
+                spec: {
+                  title: 'Inspect Relay',
+                  commands: [{ name: 'inspect', action: 'read', risk_class: 'observe' }],
+                },
+                next_command: 0,
+                created_at: '2026-05-12T00:00:00Z',
+                updated_at: '2026-05-12T00:00:00Z',
+              },
+            ],
             next_cursor: '',
             has_more: false,
           }),
@@ -154,7 +161,10 @@ test.describe('HAL-Proxy Case Detail', () => {
             id: 'case-1',
             title: 'Inspect Relay',
             status: 'paused',
-            spec: { title: 'Inspect Relay', commands: [{ name: 'inspect', action: 'read', risk_class: 'observe' }] },
+            spec: {
+              title: 'Inspect Relay',
+              commands: [{ name: 'inspect', action: 'read', risk_class: 'observe' }],
+            },
             next_command: 0,
             created_at: '2026-05-12T00:00:00Z',
             updated_at: '2026-05-12T00:00:00Z',
@@ -171,10 +181,16 @@ test.describe('HAL-Proxy Case Detail', () => {
       }
       if (url.pathname === '/v1/cases/case-1/run') {
         runCalled = true
-        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ status: 'completed' }) })
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ status: 'completed' }),
+        })
         return
       }
-      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [], next_cursor: '', has_more: false }) })
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], next_cursor: '', has_more: false }),
+      })
     })
     await page.route('**/v1/approvals**', async (route) => {
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) })
@@ -184,7 +200,10 @@ test.describe('HAL-Proxy Case Detail', () => {
       if (url.pathname === '/v1/reports/case-1/build') {
         reportCalled = true
       }
-      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: 'report-1', case_id: 'case-1' }) })
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'report-1', case_id: 'case-1' }),
+      })
     })
 
     await page.goto('/login')
@@ -197,5 +216,293 @@ test.describe('HAL-Proxy Case Detail', () => {
 
     await expect.poll(() => runCalled).toBe(true)
     await expect.poll(() => reportCalled).toBe(true)
+  })
+})
+
+test.describe('HAL-Proxy Case Creation Flow', () => {
+  test.beforeEach(async ({ page }) => {
+    await mockBridgeAPI(page)
+    await page.goto('/login')
+    await page.getByRole('button', { name: /Continue In Local Trusted Mode/i }).click()
+  })
+
+  test('user can fill in case title and submit form', async ({ page }) => {
+    let createCalled = false
+    await page.route('**/v1/cases', async (route) => {
+      if (route.request().method() === 'POST') {
+        createCalled = true
+        const body = route.request().postDataJSON()
+        const spec = body.spec || body
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            id: 'new-case-1',
+            title: spec.title,
+            status: 'pending',
+            spec: spec,
+            next_command: 0,
+            created_at: '2026-05-27T00:00:00Z',
+            updated_at: '2026-05-27T00:00:00Z',
+          }),
+        })
+        return
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], next_cursor: '', has_more: false }),
+      })
+    })
+
+    await page.goto('/cases')
+    await page.getByRole('link', { name: /New Case/i }).click()
+    await page.getByLabel(/Title/i).fill('Test Case')
+    await page.getByLabel(/Command/i).fill('ls -la')
+    await page.getByRole('button', { name: /Create|Submit/i }).click()
+
+    await expect.poll(() => createCalled).toBe(true)
+  })
+
+  test('case creation shows validation for empty title', async ({ page }) => {
+    await page.goto('/cases')
+    await page.getByRole('link', { name: /New Case/i }).click()
+    await page.getByRole('button', { name: /Create|Submit/i }).click()
+    await expect(page.getByText(/required|title.*required/i)).toBeVisible()
+  })
+})
+
+test.describe('HAL-Proxy Approval Flow', () => {
+  test.beforeEach(async ({ page }) => {
+    // Automatically accept confirm dialogs
+    page.on('dialog', (dialog) => dialog.accept())
+    await page.route('**/v1/cases**', async (route) => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], next_cursor: '', has_more: false }),
+      })
+    })
+    await page.route('**/v1/reports**', async (route) => {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    await page.goto('/login')
+    await page.getByRole('button', { name: /Continue In Local Trusted Mode/i }).click()
+  })
+
+  test('user can view pending approvals', async ({ page }) => {
+    await page.route('**/v1/approvals**', async (route) => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'approval-1',
+            case_id: 'case-1',
+            command_index: 0,
+            status: 'pending',
+            created_at: '2026-05-27T00:00:00Z',
+          },
+        ]),
+      })
+    })
+
+    await page.goto('/approvals')
+    await expect(page.locator('tbody').getByText(/Pending/i)).toBeVisible()
+  })
+
+  test('user can approve a pending approval', async ({ page }) => {
+    let approveCalled = false
+    await page.route('**/v1/approvals**', async (route) => {
+      const url = new URL(route.request().url())
+      if (route.request().method() === 'POST' && url.pathname.includes('/approve')) {
+        approveCalled = true
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ status: 'approved' }),
+        })
+        return
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'approval-1',
+            case_id: 'case-1',
+            command_index: 0,
+            status: 'pending',
+            created_at: '2026-05-27T00:00:00Z',
+          },
+        ]),
+      })
+    })
+
+    await page.goto('/approvals')
+    await page.getByRole('button', { name: /Approve/i }).click()
+    await expect.poll(() => approveCalled).toBe(true)
+  })
+
+  test('user can reject a pending approval', async ({ page }) => {
+    let rejectCalled = false
+    await page.route('**/v1/approvals**', async (route) => {
+      const url = new URL(route.request().url())
+      if (route.request().method() === 'POST' && url.pathname.includes('/reject')) {
+        rejectCalled = true
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ status: 'rejected' }),
+        })
+        return
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'approval-1',
+            case_id: 'case-1',
+            command_index: 0,
+            status: 'pending',
+            created_at: '2026-05-27T00:00:00Z',
+          },
+        ]),
+      })
+    })
+
+    await page.goto('/approvals')
+    await page.getByRole('button', { name: /Reject/i }).click()
+    await expect.poll(() => rejectCalled).toBe(true)
+  })
+})
+
+test.describe('HAL-Proxy Report Viewing', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/v1/cases**', async (route) => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], next_cursor: '', has_more: false }),
+      })
+    })
+    await page.route('**/v1/approvals**', async (route) => {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    await page.goto('/login')
+    await page.getByRole('button', { name: /Continue In Local Trusted Mode/i }).click()
+  })
+
+  test('user can view report content', async ({ page }) => {
+    await page.route('**/v1/reports**', async (route) => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'report-1',
+            case_id: 'case-1',
+            summary: 'All commands executed successfully',
+            created_at: '2026-05-27T00:00:00Z',
+          },
+        ]),
+      })
+    })
+
+    await page.goto('/reports')
+    await expect(page.getByText(/report-1|All commands executed/i)).toBeVisible()
+  })
+
+  test('reports page shows empty state when no reports', async ({ page }) => {
+    await page.route('**/v1/reports**', async (route) => {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) })
+    })
+
+    await page.goto('/reports')
+    await expect(page.getByText(/No reports|Empty/i)).toBeVisible()
+  })
+})
+
+test.describe('HAL-Proxy Logout Flow', () => {
+  test('user can logout and is redirected to login', async ({ page }) => {
+    await mockBridgeAPI(page)
+    await page.goto('/login')
+    await page.getByRole('button', { name: /Continue In Local Trusted Mode/i }).click()
+    await expect(page).not.toHaveURL(/\/login/)
+
+    await page.getByRole('button', { name: /Logout|Sign Out/i }).click()
+    await expect(page).toHaveURL(/\/login/)
+  })
+
+  test('logout clears authentication state', async ({ page }) => {
+    await mockBridgeAPI(page)
+    await page.goto('/login')
+    await page.getByRole('button', { name: /Continue In Local Trusted Mode/i }).click()
+
+    await page.getByRole('button', { name: /Logout|Sign Out/i }).click()
+    await page.goto('/cases')
+    await expect(page).toHaveURL(/\/login/)
+  })
+})
+
+test.describe('HAL-Proxy 404 Page', () => {
+  test('visiting non-existent route shows 404 page', async ({ page }) => {
+    await mockBridgeAPI(page)
+    await page.goto('/login')
+    await page.getByRole('button', { name: /Continue In Local Trusted Mode/i }).click()
+
+    await page.goto('/non-existent-route')
+    await expect(page.getByRole('heading', { name: /Page Not Found/i })).toBeVisible()
+  })
+
+  test('404 page has link back to home', async ({ page }) => {
+    await mockBridgeAPI(page)
+    await page.goto('/login')
+    await page.getByRole('button', { name: /Continue In Local Trusted Mode/i }).click()
+
+    await page.goto('/non-existent-route')
+    const homeLink = page.getByRole('link', { name: /Back to Home/i })
+    await expect(homeLink).toBeVisible()
+  })
+})
+
+test.describe('HAL-Proxy Error Handling', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/v1/approvals**', async (route) => {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    await page.route('**/v1/reports**', async (route) => {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    await page.goto('/login')
+    await page.getByRole('button', { name: /Continue In Local Trusted Mode/i }).click()
+  })
+
+  test('API 500 error shows error message', async ({ page }) => {
+    await page.route('**/v1/cases**', async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Internal Server Error' }),
+      })
+    })
+
+    await page.goto('/cases')
+    await expect(page.getByText(/error|failed|something went wrong/i)).toBeVisible({
+      timeout: 10000,
+    })
+  })
+
+  test('API 401 error redirects to login', async ({ page }) => {
+    await page.route('**/v1/cases**', async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Unauthorized' }),
+      })
+    })
+
+    await page.goto('/cases')
+    await expect(page).toHaveURL(/\/login/)
+  })
+
+  test('network error shows error message', async ({ page }) => {
+    await page.route('**/v1/cases**', async (route) => {
+      await route.abort('connectionrefused')
+    })
+
+    await page.goto('/cases')
+    await expect(page.getByText(/error|network|connection/i)).toBeVisible({ timeout: 10000 })
   })
 })

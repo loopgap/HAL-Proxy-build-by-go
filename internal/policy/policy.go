@@ -1,6 +1,10 @@
 package policy
 
-import "bridgeos/internal/domain"
+import (
+	"fmt"
+
+	"bridgeos/internal/domain"
+)
 
 // RiskConfig defines configuration for a risk class
 type RiskConfig struct {
@@ -33,40 +37,47 @@ var DefaultPolicyConfig = map[domain.RiskClass]RiskConfig{
 	},
 }
 
-// NormalizeRisk ensures the risk class is valid
-func NormalizeRisk(risk domain.RiskClass) domain.RiskClass {
+// ValidateRisk checks if a risk class is known. Returns error for unknown risk classes.
+func ValidateRisk(risk domain.RiskClass) error {
 	if _, ok := DefaultPolicyConfig[risk]; ok {
-		return risk
+		return nil
 	}
-	return domain.RiskObserve
+	return fmt.Errorf("unknown risk class: %q; valid values are observe, mutate, destructive, exclusive", risk)
 }
 
-// RequiresApproval checks if a risk class requires approval
+// NormalizeRisk ensures the risk class is valid. Returns error for unknown risk classes (fail-closed).
+func NormalizeRisk(risk domain.RiskClass) (domain.RiskClass, error) {
+	if _, ok := DefaultPolicyConfig[risk]; ok {
+		return risk, nil
+	}
+	return "", fmt.Errorf("unknown risk class: %q", risk)
+}
+
+// RequiresApproval checks if a risk class requires approval.
+// Unknown risk classes default to requiring approval (fail-closed).
 func RequiresApproval(risk domain.RiskClass) bool {
-	risk = NormalizeRisk(risk)
 	config, ok := DefaultPolicyConfig[risk]
 	if !ok {
-		return false
+		return true // fail-closed: unknown risk requires approval
 	}
 	return config.RequiresApproval
 }
 
-// GetRiskPriority returns the priority level of a risk class (higher = more severe)
+// GetRiskPriority returns the priority level of a risk class (higher = more severe).
+// Unknown risk classes return highest priority (fail-closed).
 func GetRiskPriority(risk domain.RiskClass) int {
-	risk = NormalizeRisk(risk)
 	config, ok := DefaultPolicyConfig[risk]
 	if !ok {
-		return 0
+		return 999 // fail-closed: unknown risk gets highest priority
 	}
 	return config.Priority
 }
 
 // GetRiskDescription returns a human-readable description of the risk class
 func GetRiskDescription(risk domain.RiskClass) string {
-	risk = NormalizeRisk(risk)
 	config, ok := DefaultPolicyConfig[risk]
 	if !ok {
-		return "Unknown risk level"
+		return "Unknown risk level — treated as highest risk"
 	}
 	return config.Description
 }
