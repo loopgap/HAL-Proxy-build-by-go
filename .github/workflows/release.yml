@@ -47,7 +47,7 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o release/bridgeosd-windows-amd64.exe ./cmd/bridgeosd
       
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release/*
           body_path: docs/releases/${{ github.ref_name }}.md
