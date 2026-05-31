@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.actor == 'dependabot[bot]'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: aamarj/semver-pr-merge-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
