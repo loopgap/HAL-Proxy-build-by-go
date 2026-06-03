@@ -13,7 +13,7 @@
     "prepare": "cd .. && git config core.hooksPath .husky"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.24.0",
+    "@tanstack/react-query": "^5.101.0",
     "axios": "^1.16.0",
     "clsx": "^2.1.0",
     "jwt-decode": "^4.0.0",
